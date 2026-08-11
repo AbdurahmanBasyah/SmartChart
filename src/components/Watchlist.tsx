@@ -1,0 +1,298 @@
+import React, { useState } from 'react';
+import {
+  Star,
+  Trash2,
+  BarChart2,
+  TrendingUp,
+  Search,
+  Plus,
+  Zap,
+  Target,
+  ArrowUpRight,
+  ShieldAlert,
+  Sparkles,
+  Layers,
+  Crown,
+} from 'lucide-react';
+import { StockData } from '../types';
+import { getSmcSignalPriorityScore } from './StockScreener';
+
+interface WatchlistProps {
+  watchlist: string[];
+  stocks: StockData[];
+  onSelectStock: (stock: StockData) => void;
+  onRemoveFromWatchlist: (ticker: string) => void;
+  onAddStockByTicker: (ticker: string) => Promise<void>;
+  onOpenScreener: () => void;
+}
+
+export const Watchlist: React.FC<WatchlistProps> = ({
+  watchlist,
+  stocks,
+  onSelectStock,
+  onRemoveFromWatchlist,
+  onAddStockByTicker,
+  onOpenScreener,
+}) => {
+  const [addTickerInput, setAddTickerInput] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
+
+  // Match saved tickers with stock data and sort by SMC Signal Priority
+  const watchlistStocks = watchlist
+    .map((ticker) => stocks.find((s) => s.ticker === ticker))
+    .filter(Boolean) as StockData[];
+
+  watchlistStocks.sort((a, b) => getSmcSignalPriorityScore(a) - getSmcSignalPriorityScore(b));
+
+  const onBuyAreaCount = watchlistStocks.filter(
+    (s) => s.recommendation?.isOnBuyArea || s.recommendation?.status === 'ON_BUY_AREA'
+  ).length;
+
+  const handleAddSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!addTickerInput.trim()) return;
+    const clean = addTickerInput.trim().toUpperCase();
+    setIsAdding(true);
+    await onAddStockByTicker(clean);
+    setIsAdding(false);
+    setAddTickerInput('');
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Top Banner & Stats */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-2xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-96 h-96 bg-amber-500/5 rounded-full blur-3xl pointer-events-none" />
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
+          <div>
+            <div className="flex items-center gap-2 text-amber-400 text-xs font-bold font-mono tracking-wider uppercase mb-1">
+              <Star className="w-4 h-4 fill-amber-400" />
+              <span>SMC Preferred Stock Watchlist</span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+              Potential Stock Watchlist
+            </h1>
+            <p className="text-slate-400 text-xs sm:text-sm mt-1 max-w-2xl">
+              Monitor real-time price movements, SMC entry areas, and automatic alerts when prices enter the Buy Area (On Buy Area).
+            </p>
+          </div>
+
+          {/* Quick Add Form */}
+          <form onSubmit={handleAddSubmit} className="flex items-center gap-2 shrink-0">
+            <div className="relative">
+              <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Add Ticker (e.g. ADRO, BBNI)..."
+                value={addTickerInput}
+                onChange={(e) => setAddTickerInput(e.target.value)}
+                className="bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 w-48 sm:w-56 font-mono"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={isAdding}
+              className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-lg shadow-amber-500/10 disabled:opacity-50"
+            >
+              {isAdding ? (
+                <div className="w-3.5 h-3.5 border border-slate-950 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Plus className="w-4 h-4 font-bold" />
+              )}
+              <span>Add</span>
+            </button>
+          </form>
+        </div>
+
+        {/* Stats Strip */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-slate-800/80 text-xs">
+          <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3">
+            <div className="text-slate-400 text-[11px]">Total Monitored Stocks</div>
+            <div className="text-lg font-black text-white mt-0.5 font-mono">
+              {watchlist.length} Tickers
+            </div>
+          </div>
+
+          <div className="bg-slate-950/60 border border-emerald-500/30 rounded-xl p-3">
+            <div className="text-emerald-400 text-[11px] font-bold flex items-center gap-1">
+              <Target className="w-3 h-3" />
+              <span>In Buy Area (On Buy Area)</span>
+            </div>
+            <div className="text-lg font-black text-emerald-400 mt-0.5 font-mono">
+              {onBuyAreaCount} Stocks
+            </div>
+          </div>
+
+          <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3">
+            <div className="text-slate-400 text-[11px]">Rallying Structure</div>
+            <div className="text-lg font-black text-sky-400 mt-0.5 font-mono">
+              {watchlistStocks.filter((s) => s.recommendation?.structure === 'RALLYING').length} Tickers
+            </div>
+          </div>
+
+          <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3">
+            <div className="text-slate-400 text-[11px]">Average R:R Ratio</div>
+            <div className="text-lg font-black text-amber-400 mt-0.5 font-mono">
+              1:
+              {(
+                watchlistStocks.reduce(
+                  (acc, s) => acc + (s.recommendation?.riskRewardRatio ?? 1.5),
+                  0
+                ) / Math.max(1, watchlistStocks.length)
+              ).toFixed(2)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Watchlist Cards Grid */}
+      {watchlistStocks.length === 0 ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mx-auto">
+            <Star className="w-8 h-8" />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-white">Watchlist is Empty</h3>
+            <p className="text-slate-400 text-xs mt-1 max-w-md mx-auto">
+              No stocks added to your watchlist yet. Use the search bar above or explore the Screener to bookmark your favorite stocks.
+            </p>
+          </div>
+          <button
+            onClick={onOpenScreener}
+            className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-4 py-2.5 rounded-xl text-xs inline-flex items-center gap-2 cursor-pointer shadow-lg shadow-emerald-500/20"
+          >
+            <Sparkles className="w-4 h-4" />
+            <span>Open SMC Stock Screener</span>
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {watchlistStocks.map((stock) => {
+            const rec = stock.recommendation;
+            const entryMin = rec?.entryZone?.[0] ?? 0;
+            const entryMax = rec?.entryZone?.[1] ?? 0;
+            const isOnBuy = rec?.isOnBuyArea || rec?.status === 'ON_BUY_AREA' || (
+              stock.currentPrice >= entryMin && stock.currentPrice <= entryMax
+            );
+
+            return (
+              <div
+                key={stock.ticker}
+                className={`bg-slate-900 border rounded-2xl p-5 space-y-4 shadow-xl transition-all relative group hover:border-slate-700 ${
+                  isOnBuy
+                    ? 'border-emerald-500/50 bg-gradient-to-b from-emerald-950/20 via-slate-900 to-slate-900 shadow-emerald-500/10'
+                    : 'border-slate-800'
+                }`}
+              >
+                {/* Header Strip */}
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg font-black text-white font-mono tracking-tight">
+                        {stock.ticker}
+                      </span>
+                      {stock.conglomerate && (
+                        <span className="px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-[10px] text-amber-300 font-medium flex items-center gap-1">
+                          <Crown className="w-2.5 h-2.5 text-amber-400" />
+                          <span>{stock.conglomerate}</span>
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-400 truncate max-w-[200px] mt-0.5">
+                      {stock.name}
+                    </div>
+                  </div>
+
+                  {/* Remove Button */}
+                  <button
+                    onClick={() => onRemoveFromWatchlist(stock.ticker)}
+                    className="text-slate-500 hover:text-rose-400 p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                    title="Remove from Watchlist"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Status / On Buy Area Banner */}
+                {rec?.status === 'TAPPED_POI_REBOUND' ? (
+                  <div className="bg-amber-500/15 border border-amber-500/50 rounded-xl p-2.5 px-3 flex items-center justify-between text-xs text-amber-300 font-bold font-mono shadow-sm">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                      <span>🎯 RECENTLY TAPPED FVG/OB</span>
+                    </span>
+                    <span className="text-white text-[11px]">REBOUND DEMAND</span>
+                  </div>
+                ) : isOnBuy ? (
+                  <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-xl p-2.5 px-3 flex items-center justify-between text-xs text-emerald-300 font-bold font-mono">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                      <span>🎯 IN BUY AREA</span>
+                    </span>
+                    <span className="text-white">
+                      Rp {entryMin.toLocaleString()} - {entryMax.toLocaleString()}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-2 px-3 flex items-center justify-between text-xs font-mono">
+                    <span className="text-slate-400 text-[11px]">Signal Status:</span>
+                    <span className="text-amber-400 font-bold text-[11px]">
+                      {rec?.status?.replace(/_/g, ' ')}
+                    </span>
+                  </div>
+                )}
+
+                {/* Price & Target Stats */}
+                <div className="grid grid-cols-2 gap-2 bg-slate-950/80 border border-slate-800/80 rounded-xl p-3 text-xs font-mono">
+                  <div>
+                    <div className="text-[10px] text-slate-500">Last Price</div>
+                    <div className="text-sm font-bold text-white mt-0.5">
+                      Rp {stock.currentPrice?.toLocaleString()}
+                    </div>
+                    <div
+                      className={`text-[10px] font-semibold mt-0.5 ${
+                        (stock.changePercent24h ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    >
+                      {(stock.changePercent24h ?? 0) >= 0 ? '+' : ''}
+                      {(stock.changePercent24h ?? 0).toFixed(2)}%
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-[10px] text-slate-500">Target TP1 / TP2</div>
+                    <div className="text-xs font-bold text-emerald-400 mt-0.5">
+                      Rp {rec?.takeProfit1?.toLocaleString()} (+{rec?.takeProfit1Percent}%)
+                    </div>
+                    <div className="text-[10px] text-emerald-300/80">
+                      TP2: Rp {rec?.takeProfit2?.toLocaleString()} (+{rec?.takeProfit2Percent}%)
+                    </div>
+                  </div>
+                </div>
+
+                {/* Key Metrics Footnote */}
+                <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 pt-1 border-t border-slate-800/60">
+                  <span>
+                    SL: <strong className="text-rose-400">Rp {rec?.stopLoss?.toLocaleString()}</strong> ({rec?.stopLossPercent}%)
+                  </span>
+                  <span>
+                    R:R <strong className="text-emerald-400">1:{rec?.riskRewardRatio}</strong>
+                  </span>
+                </div>
+
+                {/* Open Interactive Chart Button */}
+                <button
+                  onClick={() => onSelectStock(stock)}
+                  className="w-full bg-slate-800 hover:bg-emerald-600 hover:text-slate-950 text-slate-200 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg group-hover:bg-emerald-500 group-hover:text-slate-950"
+                >
+                  <BarChart2 className="w-4 h-4" />
+                  <span>Open Interactive Chart</span>
+                  <ArrowUpRight className="w-4 h-4 opacity-70" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};

@@ -1,0 +1,6 @@
+{
+  "name": "IDX Smart Money Concepts Tracker",
+  "description": "Smart Money Concepts (SMC) technical analysis & stock screener for Indonesian stocks (IDX) with FVG, Order Block, BOS, CHoCH, Liquidity Sweep, volume confirmation, and risk-reward trading plans.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
