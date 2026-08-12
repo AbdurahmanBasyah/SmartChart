@@ -284,7 +284,25 @@ export function detectBosChoch(candles: Candle[], swings: SwingPoint[]): BosChoc
     }
   }
 
-  return lines;
+  // Deduplicate and filter out overlapping CHoCH & BOS lines that stack on top of each other
+  const cleanLines: BosChochLine[] = [];
+  for (const line of lines) {
+    const isDuplicateOrOverlapping = cleanLines.some((existing) => {
+      const priceDiffRatio = Math.abs(existing.price - line.price) / Math.max(1, line.price);
+      if (existing.type === line.type) {
+        // Same structure type (CHoCH vs CHoCH or BOS vs BOS): price within 1.5% or indices close together
+        return priceDiffRatio < 0.015 || Math.abs(existing.endIndex - line.endIndex) < 6;
+      }
+      // Different structure types at almost exact price level (< 0.8%)
+      return priceDiffRatio < 0.008;
+    });
+
+    if (!isDuplicateOrOverlapping) {
+      cleanLines.push(line);
+    }
+  }
+
+  return cleanLines;
 }
 
 /**
@@ -1145,23 +1163,27 @@ export function generateRecommendation(
   const isNearEntry = currentPrice >= entryMin * 0.97 && currentPrice <= entryMax * 1.04;
 
   // Check if a closed candle tapped into an active DEMAND POI (Bullish OB / Bullish FVG / Bullish Gap)
+  // RULE: The POI MUST have been formed by earlier candles (not created by the candle itself)
   let isYesterdayTappedPoi = false;
   let tappedPoiLabel = '';
   const candidateCandles = [lastCandle, prevCandle].filter(Boolean) as Candle[];
   for (const c of candidateCandles) {
     if (isYesterdayTappedPoi) break;
+    const cIndex = candles.indexOf(c);
+    if (cIndex === -1) continue;
 
     // Strictly match BULLISH Demand zones (Bullish OB, Bullish FVG, Bullish Gap)
     // where price tapped into the zone (c.low <= top && c.high >= bottom)
     // AND closed at or above the zone top boundary (c.close >= top)
+    // AND the zone was formed strictly by EARLIER candles!
     const tappedOb = activeBullObs.find(
-      (ob) => ob.type === 'bullish' && c.low <= ob.top && c.high >= ob.bottom && c.close >= ob.top
+      (ob) => ob.type === 'bullish' && ob.startIndex < cIndex - 1 && c.low <= ob.top && c.high >= ob.bottom && c.close >= ob.top
     );
     const tappedFvg = activeBullFvgs.find(
-      (fvg) => fvg.type === 'bullish' && c.low <= fvg.top && c.high >= fvg.bottom && c.close >= fvg.top
+      (fvg) => fvg.type === 'bullish' && fvg.startIndex < cIndex - 2 && c.low <= fvg.top && c.high >= fvg.bottom && c.close >= fvg.top
     );
     const tappedGap = activeBullGaps.find(
-      (gap) => gap.type === 'bullish' && c.low <= gap.top && c.high >= gap.bottom && c.close >= gap.top
+      (gap) => gap.type === 'bullish' && gap.startIndex < cIndex - 1 && c.low <= gap.top && c.high >= gap.bottom && c.close >= gap.top
     );
 
     if (tappedOb) {

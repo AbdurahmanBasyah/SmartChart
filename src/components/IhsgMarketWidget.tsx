@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   TrendingUp,
   BarChart2,
@@ -9,25 +9,79 @@ import {
   Layers,
   CheckCircle2,
   AlertCircle,
+  Loader2,
 } from 'lucide-react';
 import { StockData } from '../types';
 
 interface IhsgMarketWidgetProps {
   ihsgStock?: StockData;
   onOpenChart: (ticker: string) => void;
+  onUpdateIhsgData?: (liveData: StockData) => void;
 }
 
 export const IhsgMarketWidget: React.FC<IhsgMarketWidgetProps> = ({
   ihsgStock,
   onOpenChart,
+  onUpdateIhsgData,
 }) => {
-  if (!ihsgStock) return null;
+  const [activeStock, setActiveStock] = useState<StockData | undefined>(ihsgStock);
+  const [isLiveLoading, setIsLiveLoading] = useState<boolean>(false);
 
-  const candles = ihsgStock.candles || [];
+  useEffect(() => {
+    if (ihsgStock) {
+      setActiveStock(ihsgStock);
+    }
+  }, [ihsgStock]);
+
+  // Lazy load real-time IHSG market data on mount
+  useEffect(() => {
+    let isMounted = true;
+    async function fetchLiveIhsg() {
+      setIsLiveLoading(true);
+      try {
+        let fresh: StockData | null = null;
+        try {
+          const res = await fetch('/api/stock/^JKSE');
+          if (res.ok) {
+            fresh = await res.json();
+          }
+        } catch (e) {
+          // fallback to client fetch
+        }
+
+        if (!fresh) {
+          const { fetchYahooStockData } = await import('../services/yahooFinance');
+          fresh = await fetchYahooStockData('^JKSE');
+        }
+
+        if (isMounted && fresh && fresh.candles && fresh.candles.length > 0) {
+          setActiveStock(fresh);
+          if (onUpdateIhsgData) {
+            onUpdateIhsgData(fresh);
+          }
+        }
+      } catch (err) {
+        console.warn('Lazy loading IHSG market data error:', err);
+      } finally {
+        if (isMounted) setIsLiveLoading(false);
+      }
+    }
+
+    fetchLiveIhsg();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const displayStock = activeStock || ihsgStock;
+  if (!displayStock) return null;
+
+  const candles = displayStock.candles || [];
   const recentCandles = candles.slice(-35); // last 35 candles for mini chart
-  const currentPrice = ihsgStock.currentPrice || 7350;
-  const changePercent = ihsgStock.changePercent24h || 0.45;
-  const rec = ihsgStock.recommendation;
+  const currentPrice = displayStock.currentPrice || 7350;
+  const changePercent = displayStock.changePercent24h || 0.45;
+  const rec = displayStock.recommendation;
 
   // Find min/max for SVG scaling
   const highs = recentCandles.map((c) => c.high);
@@ -64,8 +118,18 @@ export const IhsgMarketWidget: React.FC<IhsgMarketWidgetProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-xl font-extrabold text-white">IHSG</h2>
-              <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono border border-slate-700">
-                Composite Stock Price Index
+              <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono border border-slate-700 flex items-center gap-1.5">
+                {isLiveLoading ? (
+                  <>
+                    <Loader2 className="w-3 h-3 text-emerald-400 animate-spin" />
+                    <span>Live Syncing...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>Live Market Data</span>
+                  </>
+                )}
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
@@ -90,7 +154,7 @@ export const IhsgMarketWidget: React.FC<IhsgMarketWidgetProps> = ({
           </div>
 
           <button
-            onClick={() => onOpenChart(ihsgStock.ticker || '^JKSE')}
+            onClick={() => onOpenChart(displayStock.ticker || '^JKSE')}
             className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs shadow-lg shadow-emerald-500/20 flex items-center gap-2 cursor-pointer transition-all hover:scale-105"
           >
             <BarChart2 className="w-4 h-4" />

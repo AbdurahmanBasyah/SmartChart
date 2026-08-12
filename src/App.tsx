@@ -12,6 +12,16 @@ import { SmcLoadingModal } from './components/SmcLoadingModal';
 import { getMockStocks } from './data/mockStocks';
 import { StockData } from './types';
 
+function isMatchingTicker(tickerA?: string, tickerB?: string): boolean {
+  if (!tickerA || !tickerB) return false;
+  const normA = tickerA.toUpperCase().replace('.JK', '');
+  const normB = tickerB.toUpperCase().replace('.JK', '');
+  if (normA === normB) return true;
+  const isIhsgA = normA === '^JKSE' || normA === 'IHSG' || normA === 'JKSE';
+  const isIhsgB = normB === '^JKSE' || normB === 'IHSG' || normB === 'JKSE';
+  return isIhsgA && isIhsgB;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'landing' | 'chart' | 'screener' | 'guide' | 'calculator' | 'watchlist'>('landing');
   const [stocks, setStocks] = useState<StockData[]>([]);
@@ -70,6 +80,29 @@ export default function App() {
       setStocks(initial);
       setSelectedStock(initial[0]);
       setLoading(false);
+
+      // Trigger client-side live market sync for top liquid stocks if server API is absent (e.g. Vercel static)
+      setTimeout(async () => {
+        try {
+          const { fetchYahooStockData } = await import('./services/yahooFinance');
+          const primaryTickers = ['BRPT', 'BBCA', '^JKSE', 'ADRO', 'BUMI', 'CUAN', 'BREN', 'GOTO'];
+          for (const t of primaryTickers) {
+            try {
+              const live = await fetchYahooStockData(t);
+              if (live && live.candles && live.candles.length > 0) {
+                setStocks((prev) =>
+                  prev.map((s) => (isMatchingTicker(s.ticker, live.ticker) ? live : s))
+                );
+                setSelectedStock((curr) => (isMatchingTicker(curr?.ticker, live.ticker) ? live : curr));
+              }
+            } catch (err) {
+              // silent continue
+            }
+          }
+        } catch (e) {
+          console.warn('Client-side market sync error:', e);
+        }
+      }, 1000);
     }
 
     loadStocks();
@@ -100,17 +133,30 @@ export default function App() {
   const handleSelectStock = async (stock: StockData) => {
     setFetchingTicker(stock.ticker);
     setIsStockFetching(true);
-    const minDelay = new Promise((resolve) => setTimeout(resolve, 2400));
+    const minDelay = new Promise((resolve) => setTimeout(resolve, 1800));
     try {
-      const [res] = await Promise.all([
-        fetch(`/api/stock/${stock.ticker}`),
-        minDelay,
-      ]);
-      if (res.ok) {
-        const freshRealData: StockData = await res.json();
+      let freshRealData: StockData | null = null;
+      try {
+        const res = await fetch(`/api/stock/${stock.ticker}`);
+        if (res.ok) {
+          freshRealData = await res.json();
+        }
+      } catch (e) {
+        console.warn('Backend API unavailable, falling back to direct client fetch:', e);
+      }
+
+      // If backend API failed or unavailable (e.g. Vercel deployment), fetch client-side with CORS proxy
+      if (!freshRealData) {
+        const { fetchYahooStockData } = await import('./services/yahooFinance');
+        freshRealData = await fetchYahooStockData(stock.ticker);
+      }
+
+      await minDelay;
+
+      if (freshRealData) {
         setSelectedStock(freshRealData);
         setStocks((prev) =>
-          prev.map((s) => (s.ticker === freshRealData.ticker ? freshRealData : s))
+          prev.map((s) => (s.ticker === freshRealData!.ticker ? freshRealData! : s))
         );
       } else {
         setSelectedStock(stock);
@@ -130,17 +176,29 @@ export default function App() {
     }
     setFetchingTicker(cleanTicker);
     setIsStockFetching(true);
-    const minDelay = new Promise((resolve) => setTimeout(resolve, 2400));
+    const minDelay = new Promise((resolve) => setTimeout(resolve, 1800));
     try {
-      const [res] = await Promise.all([
-        fetch(`/api/stock/${cleanTicker}`),
-        minDelay,
-      ]);
-      if (res.ok) {
-        const stockData: StockData = await res.json();
+      let stockData: StockData | null = null;
+      try {
+        const res = await fetch(`/api/stock/${cleanTicker}`);
+        if (res.ok) {
+          stockData = await res.json();
+        }
+      } catch (e) {
+        console.warn('Backend API unavailable, using client fetch:', e);
+      }
+
+      if (!stockData) {
+        const { fetchYahooStockData } = await import('./services/yahooFinance');
+        stockData = await fetchYahooStockData(cleanTicker);
+      }
+
+      await minDelay;
+
+      if (stockData) {
         setStocks((prev) => {
-          const exists = prev.some((s) => s.ticker === stockData.ticker);
-          return exists ? prev.map((s) => (s.ticker === stockData.ticker ? stockData : s)) : [stockData, ...prev];
+          const exists = prev.some((s) => s.ticker === stockData!.ticker);
+          return exists ? prev.map((s) => (s.ticker === stockData!.ticker ? stockData! : s)) : [stockData!, ...prev];
         });
         setSelectedStock(stockData);
       }
@@ -208,6 +266,11 @@ export default function App() {
             onStartChart={handleStartChart}
             onOpenScreener={() => setActiveTab('screener')}
             stocks={stocks}
+            onUpdateIhsgData={(liveData) => {
+              setStocks((prev) =>
+                prev.map((s) => (isMatchingTicker(s.ticker, liveData.ticker) ? liveData : s))
+              );
+            }}
           />
         )}
 
@@ -312,7 +375,7 @@ export default function App() {
       <footer className="border-t border-slate-800/80 bg-slate-950 py-6 text-center text-xs text-slate-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div>
-            <strong>SmartMoney.IDX</strong> — Smart Money Concepts Technical Analysis Platform for Indonesia Stocks
+            <strong>SmartChart</strong> — Smart Money Concepts Technical Analysis Platform for Indonesia Stocks
           </div>
           <div className="text-[11px] text-slate-400">
             Always LONG | Min R:R 1:1.5 | TP 10%-20% | SL 3%-5% | Volume Confirmation Indicator

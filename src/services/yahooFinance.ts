@@ -31,22 +31,36 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
 
   const randomUserAgent = userAgents[Math.floor(Math.random() * userAgents.length)];
 
-  // Endpoints to attempt (query1 and query2 fallback)
-  const urls = [
+  // Endpoints to attempt (direct query and CORS proxies)
+  const targetUrls = [
     `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=1y`,
     `https://query2.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=1y`
   ];
 
+  // Prepare full list of endpoints including CORS proxies for browser/Vercel environments
+  const urls: string[] = [];
+  for (const target of targetUrls) {
+    urls.push(target);
+    urls.push(`https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`);
+    urls.push(`https://corsproxy.io/?${encodeURIComponent(target)}`);
+  }
+
   for (const url of urls) {
     try {
-      const res = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-          'Accept': 'application/json, text/plain, */*',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Cache-Control': 'no-cache',
-        },
-      });
+      const isProxy = url.includes('allorigins') || url.includes('corsproxy');
+      const fetchOpts: RequestInit = isProxy
+        ? {}
+        : {
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+              'Accept': 'application/json, text/plain, */*',
+              'Accept-Language': 'en-US,en;q=0.9',
+              'Cache-Control': 'no-cache',
+            },
+          };
+
+      const res = await fetch(url, fetchOpts);
 
       if (!res.ok) continue;
 

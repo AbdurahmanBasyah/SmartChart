@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Filter,
   Search,
@@ -100,10 +100,46 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number | 'ALL'>(10);
 
-  // Reset pagination to page 1 whenever filters or sorting change
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [filters, excludeDowntrend, sortField, sortAsc]);
+  // Identify Top Pick candidates based on SMC priority score, close to entry, & upside potential
+  const topPickSet = useMemo(() => {
+    const candidates = stocks
+      .filter((s) => {
+        const priority = getSmcSignalPriorityScore(s);
+        const rec = s.recommendation;
+        const cp = s.currentPrice ?? 0;
+        const tp1 = rec?.takeProfit1 ?? 0;
+        const entryMin = rec?.entryZone?.[0] ?? cp;
+        const entryMax = rec?.entryZone?.[1] ?? cp;
+        const isOnBuyArea = cp >= entryMin && cp <= entryMax;
+        const isNearEntry =
+          isOnBuyArea ||
+          rec?.status === 'TAPPED_POI_REBOUND' ||
+          rec?.status === 'ON_BUY_AREA' ||
+          rec?.status === 'NEAR_ENTRY' ||
+          (cp >= entryMin * 0.95 && cp <= entryMax * 1.04);
+
+        const upside = cp > 0 && tp1 > cp ? ((tp1 - cp) / cp) * 100 : 0;
+
+        return priority <= 3 && isNearEntry && upside >= 2.0 && rec?.status !== 'NO_ENTRY';
+      })
+      .sort((a, b) => {
+        const pA = getSmcSignalPriorityScore(a);
+        const pB = getSmcSignalPriorityScore(b);
+        if (pA !== pB) return pA - pB;
+
+        const cpA = a.currentPrice ?? 0;
+        const cpB = b.currentPrice ?? 0;
+        const tp1A = a.recommendation?.takeProfit1 ?? 0;
+        const tp1B = b.recommendation?.takeProfit1 ?? 0;
+        const upsideA = cpA > 0 && tp1A > cpA ? (tp1A - cpA) / cpA : 0;
+        const upsideB = cpB > 0 && tp1B > cpB ? (tp1B - cpB) / cpB : 0;
+        return upsideB - upsideA;
+      })
+      .slice(0, 6)
+      .map((s) => s.ticker);
+
+    return new Set(candidates);
+  }, [stocks]);
 
   // Apply filters
   const filteredStocks = stocks.filter((stock) => {
@@ -155,7 +191,9 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
 
     // Signal Status filter (includes Mendekati Titik Entry, On Buy Area & Menunggu FVG)
     if (filters.signalStatus && filters.signalStatus !== 'ALL') {
-      if (filters.signalStatus === 'ON_BUY_AREA') {
+      if ((filters.signalStatus as string) === 'TOP_PICKS') {
+        if (!topPickSet.has(stock.ticker)) return false;
+      } else if (filters.signalStatus === 'ON_BUY_AREA') {
         const isBuyArea = rec?.isOnBuyArea || rec?.status === 'ON_BUY_AREA' || (
           (stock.currentPrice ?? 0) >= (rec?.entryZone?.[0] ?? 0) &&
           (stock.currentPrice ?? 0) <= (rec?.entryZone?.[1] ?? 0)
@@ -297,9 +335,10 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
             <select
               value={filters.signalStatus}
               onChange={(e) => setFilters({ ...filters, signalStatus: e.target.value as any })}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-emerald-500 font-medium"
+              className="w-full bg-slate-950 border border-emerald-500/40 text-emerald-300 font-semibold rounded-xl px-3 py-2 focus:outline-none focus:border-emerald-400"
             >
               <option value="ALL">All SMC Signals (Priority Sorted)</option>
+              <option value="TOP_PICKS">🔥 TOP PICKS (Near Entry & High Upside)</option>
               <option value="TAPPED_POI_REBOUND">🎯 1. Tapped FVG/OB Recently (Rebound)</option>
               <option value="ON_BUY_AREA">🎯 2. In Buy Area (On Buy Area)</option>
               <option value="NEAR_ENTRY">📍 3. Near Entry Area (0-3%)</option>
@@ -470,9 +509,16 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
                               }`}
                             />
                           </button>
-                          <div>
-                            <div className="font-bold text-white text-sm group-hover:text-emerald-400 transition-colors">
-                              {stock.ticker}
+                          <div className="relative">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-bold text-white text-sm group-hover:text-emerald-400 transition-colors">
+                                {stock.ticker}
+                              </span>
+                              {topPickSet.has(stock.ticker) && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider bg-gradient-to-r from-amber-400 via-emerald-400 to-teal-300 text-slate-950 rounded-full shadow-lg shadow-emerald-500/20 ring-1 ring-amber-300/50 animate-pulse shrink-0">
+                                  🔥 TOP PICK
+                                </span>
+                              )}
                             </div>
                             <div className="text-[11px] text-slate-400 font-sans truncate max-w-[140px]">
                               {stock.name}

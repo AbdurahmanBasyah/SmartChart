@@ -127,6 +127,16 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
   const dragStartPriceOffset = useRef(0);
   const pricePerPixelRef = useRef(0.01);
 
+  // Mobile Touch Gesture state refs
+  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const touchStartPinchDistRef = useRef<number | null>(null);
+  const touchStartZoomRef = useRef<number>(1);
+  const touchStartScaleRef = useRef<number>(1);
+  const touchStartScrollOffsetRef = useRef<number>(-6);
+  const touchStartPriceOffsetRef = useRef<number>(0);
+  const isTouchDraggingChart = useRef<boolean>(false);
+  const isTouchDraggingAxis = useRef<boolean>(false);
+
   const candles = stock.candles;
 
   // Global drag listener for smooth 2D drag/pan on chart and price axis
@@ -319,8 +329,14 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
       return paddingTop + priceChartHeight + volumeHeight - (vol / maxVol) * volumeHeight;
     };
 
+    // --- THEME COLOR DEFINITIONS ---
+    const bgColor = '#0f172a';
+    const gridColor = '#1e293b';
+    const axisTextColor = '#94a3b8';
+    const timeTextColor = '#64748b';
+
     // --- DRAW BACKGROUND ---
-    ctx.fillStyle = '#0f172a'; // Dark slate background matching TradingView theme
+    ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, width, height);
 
     // --- DRAW GRID LINES & PRICE LABELS ---
@@ -348,7 +364,7 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
       const y = getY(p);
 
       if (y >= paddingTop - 2 && y <= paddingTop + priceChartHeight + 2) {
-        ctx.strokeStyle = '#1e293b';
+        ctx.strokeStyle = gridColor;
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(paddingLeft, y);
@@ -356,7 +372,7 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
         ctx.stroke();
 
         // Price Tag on Right Axis (Clean round numbers: 5, 10, 20, 50, 100, 500, etc.)
-        ctx.fillStyle = '#94a3b8';
+        ctx.fillStyle = axisTextColor;
         ctx.font = '10px Inter, sans-serif';
         ctx.textAlign = 'left';
         ctx.fillText(`Rp ${Math.round(p).toLocaleString()}`, width - paddingRight + 8, y + 3);
@@ -367,12 +383,13 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
     const timeStep = Math.max(1, Math.floor(visibleCandles.length / 5));
     for (let i = 0; i < visibleCandles.length; i += timeStep) {
       const x = getX(startIndex + i);
+      ctx.strokeStyle = gridColor;
       ctx.beginPath();
       ctx.moveTo(x, paddingTop);
       ctx.lineTo(x, height - paddingBottom);
       ctx.stroke();
 
-      ctx.fillStyle = '#64748b';
+      ctx.fillStyle = timeTextColor;
       ctx.font = '10px Inter, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(visibleCandles[i].time.slice(5), x, height - paddingBottom + 16);
@@ -475,6 +492,8 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
 
     // --- DRAW BOS & CHOCH LINES ---
     if (showBosChoch) {
+      const drawnLabelPositions: { x: number; y: number }[] = [];
+
       stock.bosChochLines.forEach((line) => {
         if (line.endIndex >= startIndex && line.startIndex <= endIndex) {
           const startX = getX(line.startIndex);
@@ -488,12 +507,22 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
           ctx.lineTo(endX, y);
           ctx.stroke();
 
-          // Text label
+          // Text label with collision avoidance
+          const midX = (startX + endX) / 2;
+          let labelY = y - 4;
+
+          const collision = drawnLabelPositions.some(
+            (pos) => Math.abs(pos.y - labelY) < 14 && Math.abs(pos.x - midX) < 70
+          );
+          if (collision) {
+            labelY = y + 12; // Shift label below line if overlapping
+          }
+          drawnLabelPositions.push({ x: midX, y: labelY });
+
           ctx.fillStyle = line.type === 'CHoCH' ? '#fbbf24' : '#7dd3fc';
           ctx.font = 'bold 10px Inter, sans-serif';
           ctx.textAlign = 'center';
-          const midX = (startX + endX) / 2;
-          ctx.fillText(`— ${line.label} —`, midX, y - 4);
+          ctx.fillText(`— ${line.label} —`, midX, labelY);
         }
       });
     }
@@ -601,48 +630,85 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
     const changeText = `${changeVal >= 0 ? '+' : ''}${changeVal.toFixed(2)}%`;
     const isUp = changeVal >= 0;
 
-    const boxX = paddingLeft + 10;
-    const boxY = paddingTop + 8;
-    const boxWidth = Math.min(320, width - paddingLeft - paddingRight - 20);
-    const boxHeight = 54;
+    const isMobile = width < 600;
 
-    // Translucent dark container background for optimal contrast
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
-    ctx.strokeStyle = 'rgba(51, 65, 85, 0.8)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    if (typeof (ctx as any).roundRect === 'function') {
-      (ctx as any).roundRect(boxX, boxY, boxWidth, boxHeight, 8);
+    if (isMobile) {
+      // Compact, unobtrusive single-line overlay for mobile screens that doesn't block chart candles
+      const mobX = paddingLeft + 6;
+      const mobY = paddingTop + 4;
+      const mobWidth = Math.min(220, width - paddingLeft - paddingRight - 12);
+      const mobHeight = 24;
+
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.65)';
+      ctx.strokeStyle = 'rgba(51, 65, 85, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      if (typeof (ctx as any).roundRect === 'function') {
+        (ctx as any).roundRect(mobX, mobY, mobWidth, mobHeight, 6);
+      } else {
+        ctx.rect(mobX, mobY, mobWidth, mobHeight);
+      }
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 11px Inter, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(`${tickerName}  ${priceText}`, mobX + 8, mobY + 16);
+
+      ctx.font = 'bold 10px Inter, sans-serif';
+      ctx.fillStyle = isUp ? '#34d399' : '#f87171';
+      ctx.fillText(`(${changeText})`, mobX + mobWidth - 55, mobY + 16);
+
+      // Watermark top right
+      ctx.font = 'bold 10px Inter, sans-serif';
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.8)';
+      ctx.textAlign = 'right';
+      ctx.fillText('SmartChart', width - paddingRight - 8, paddingTop + 18);
     } else {
-      ctx.rect(boxX, boxY, boxWidth, boxHeight);
+      // Full Desktop Stock Badge
+      const boxX = paddingLeft + 10;
+      const boxY = paddingTop + 8;
+      const boxWidth = Math.min(320, width - paddingLeft - paddingRight - 20);
+      const boxHeight = 54;
+
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+      ctx.strokeStyle = 'rgba(51, 65, 85, 0.8)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      if (typeof (ctx as any).roundRect === 'function') {
+        (ctx as any).roundRect(boxX, boxY, boxWidth, boxHeight, 8);
+      } else {
+        ctx.rect(boxX, boxY, boxWidth, boxHeight);
+      }
+      ctx.fill();
+      ctx.stroke();
+
+      // Ticker Symbol
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 18px Inter, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(tickerName, boxX + 12, boxY + 23);
+
+      // Price & Percentage Change
+      ctx.font = 'bold 12px Inter, sans-serif';
+      ctx.fillStyle = isUp ? '#34d399' : '#f87171';
+      ctx.fillText(`${priceText} (${changeText})`, boxX + 100, boxY + 22);
+
+      // Full Company Name & Conglomerate Group
+      ctx.font = '10px Inter, sans-serif';
+      ctx.fillStyle = '#94a3b8';
+      const subText = `${stock.name.length > 32 ? stock.name.slice(0, 30) + '...' : stock.name}${
+        stock.conglomerate ? ` • ${stock.conglomerate}` : ''
+      }`;
+      ctx.fillText(subText, boxX + 12, boxY + 43);
+
+      // Platform Branding / Watermark
+      ctx.font = 'bold 11px Inter, sans-serif';
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.7)';
+      ctx.textAlign = 'right';
+      ctx.fillText('SmartChart • 1D (Daily)', width - paddingRight - 12, paddingTop + 22);
     }
-    ctx.fill();
-    ctx.stroke();
-
-    // Ticker Symbol
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 18px Inter, sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText(tickerName, boxX + 12, boxY + 23);
-
-    // Price & Percentage Change
-    ctx.font = 'bold 12px Inter, sans-serif';
-    ctx.fillStyle = isUp ? '#34d399' : '#f87171';
-    ctx.fillText(`${priceText} (${changeText})`, boxX + 100, boxY + 22);
-
-    // Full Company Name & Conglomerate Group
-    ctx.font = '10px Inter, sans-serif';
-    ctx.fillStyle = '#94a3b8';
-    const subText = `${stock.name.length > 32 ? stock.name.slice(0, 30) + '...' : stock.name}${
-      stock.conglomerate ? ` • ${stock.conglomerate}` : ''
-    }`;
-    ctx.fillText(subText, boxX + 12, boxY + 43);
-
-    // Platform Branding / Watermark
-    ctx.font = 'bold 11px Inter, sans-serif';
-    ctx.fillStyle = 'rgba(56, 189, 248, 0.7)';
-    ctx.textAlign = 'right';
-    ctx.fillText('SmartMoney.IDX • 1D (Daily)', width - paddingRight - 12, paddingTop + 22);
 
     ctx.restore();
 
@@ -1016,6 +1082,122 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
     }
   };
 
+  // Touch Handlers for Mobile Chart Gesture Drag, Price Scale Adjust & Pinch Zoom
+  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    dragDistanceRef.current = 0;
+    const rect = canvas.getBoundingClientRect();
+    const paddingRight = 85;
+
+    if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      const x = touch.clientX - rect.left;
+      const y = touch.clientY - rect.top;
+
+      touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
+      dragStartX.current = touch.clientX;
+      dragStartY.current = touch.clientY;
+      dragStartScrollOffset.current = scrollOffset;
+      dragStartPriceOffset.current = priceOffset;
+      dragStartScale.current = priceScale;
+
+      if (x >= rect.width - paddingRight) {
+        setIsDraggingAxis(true);
+        isTouchDraggingAxis.current = true;
+      } else {
+        setIsDraggingChart(true);
+        isTouchDraggingChart.current = true;
+
+        // Mobile touch readout tooltip for candle
+        const paddingLeft = 15;
+        const chartWidth = rect.width - paddingLeft - paddingRight;
+        const baseCandleWidth = 10;
+        const candleWidth = Math.max(3, Math.min(40, baseCandleWidth * zoomLevel));
+        const candleGap = Math.max(1, candleWidth * 0.25);
+        const totalBarSpace = candleWidth + candleGap;
+        const visibleCandlesCount = Math.floor(chartWidth / totalBarSpace);
+        const endIndex = Math.max(visibleCandlesCount, candles.length - Math.floor(scrollOffset));
+        const startIndex = Math.max(0, endIndex - visibleCandlesCount);
+
+        const relX = x - paddingLeft;
+        const hoveredIdx = startIndex + Math.floor(relX / totalBarSpace);
+
+        if (hoveredIdx >= 0 && hoveredIdx < candles.length) {
+          setHoveredCandle({
+            candle: candles[hoveredIdx],
+            index: hoveredIdx,
+            x,
+            y,
+          });
+        }
+      }
+    } else if (e.touches.length === 2) {
+      // 2-finger pinch gesture start
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      touchStartPinchDistRef.current = dist;
+      touchStartZoomRef.current = zoomLevel;
+      touchStartScaleRef.current = priceScale;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    if (e.touches.length === 1 && touchStartPosRef.current) {
+      const touch = e.touches[0];
+      const deltaX = touch.clientX - dragStartX.current;
+      const deltaY = touch.clientY - dragStartY.current;
+
+      dragDistanceRef.current += Math.abs(deltaX) + Math.abs(deltaY);
+
+      if (isTouchDraggingChart.current) {
+        const baseCandleWidth = 10;
+        const candleWidth = Math.max(3, Math.min(40, baseCandleWidth * zoomLevel));
+        const candleGap = Math.max(1, candleWidth * 0.25);
+        const totalBarSpace = candleWidth + candleGap;
+
+        // 1. Horizontal Drag (X Axis)
+        const candleOffset = deltaX / totalBarSpace;
+        const maxOffset = Math.max(0, candles.length - 10);
+        const minOffset = -20;
+        const newOffset = Math.max(minOffset, Math.min(maxOffset, dragStartScrollOffset.current + candleOffset));
+        setScrollOffset(newOffset);
+
+        // 2. Vertical Drag (Y Axis)
+        const newPriceOffset = dragStartPriceOffset.current + deltaY * pricePerPixelRef.current;
+        setPriceOffset(newPriceOffset);
+      } else if (isTouchDraggingAxis.current) {
+        const deltaAxisY = dragStartY.current - touch.clientY;
+        const factor = 1 + deltaAxisY * 0.008;
+        const newScale = Math.max(0.1, Math.min(10.0, dragStartScale.current * factor));
+        setPriceScale(newScale);
+      }
+    } else if (e.touches.length === 2 && touchStartPinchDistRef.current) {
+      // Pinch zoom handling
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const currentDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      const scaleFactor = currentDist / touchStartPinchDistRef.current;
+
+      const newZoom = Math.max(0.4, Math.min(3.0, touchStartZoomRef.current * scaleFactor));
+      setZoomLevel(newZoom);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    setIsDraggingChart(false);
+    setIsDraggingAxis(false);
+    isTouchDraggingChart.current = false;
+    isTouchDraggingAxis.current = false;
+    touchStartPosRef.current = null;
+    touchStartPinchDistRef.current = null;
+  };
+
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col h-[620px]">
       {/* Top Controls Bar */}
@@ -1213,6 +1395,10 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
           onClick={handleCanvasClick}
           onDoubleClick={handleDoubleClick}
           onMouseMove={handleMouseMove}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onTouchCancel={handleTouchEnd}
           onMouseLeave={() => {
             setHoveredCandle(null);
             setIsDraggingAxis(false);
@@ -1221,7 +1407,7 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
             setHoveredEndpoint(null);
             setDraggingEndpoint(null);
           }}
-          className={`w-full h-full block ${
+          className={`w-full h-full block touch-none ${
             draggingEndpoint
               ? 'cursor-grabbing'
               : hoveredEndpoint
