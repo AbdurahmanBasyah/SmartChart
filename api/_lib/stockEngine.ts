@@ -265,7 +265,11 @@ export async function fetchYahooStockDataServer(rawTicker: string): Promise<Stoc
 
   for (const target of targets) {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+
       const res = await fetch(target, {
+        signal: controller.signal,
         headers: {
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -274,6 +278,8 @@ export async function fetchYahooStockDataServer(rawTicker: string): Promise<Stoc
           'Cache-Control': 'no-cache',
         },
       });
+
+      clearTimeout(timeoutId);
 
       if (!res.ok) continue;
 
@@ -297,14 +303,14 @@ export async function fetchYahooStockDataServer(rawTicker: string): Promise<Stoc
         const c = closes[i];
         const v = volumes[i];
 
-        if (o == null || h == null || l == null || c == null) continue;
+        if (o == null || h == null || l == null || c == null || c <= 0) continue;
 
         const dateStr = new Date(timestamps[i] * 1000).toISOString().split('T')[0];
         candles.push({
           time: dateStr,
           open: Math.round(o),
-          high: Math.round(h),
-          low: Math.round(l),
+          high: Math.round(Math.max(h, o, c)),
+          low: Math.round(Math.min(l, o, c)),
           close: Math.round(c),
           volume: Math.round(v || 1000),
         });
@@ -334,7 +340,7 @@ export async function fetchYahooStockDataServer(rawTicker: string): Promise<Stoc
     }
   }
 
-  // Fallback if Yahoo network fails on server
+  // Fallback if Yahoo network fails or times out on server
   const isIhsg = cleanTicker === '^JKSE';
   const finalTicker = isIhsg ? 'IHSG' : cleanTicker;
   const matchedConfig = liquidIDXStocksConfig.find((s) => s.t === cleanTicker);

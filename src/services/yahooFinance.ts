@@ -54,8 +54,12 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
 
   for (const item of candidates) {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+
       const fetchOpts: RequestInit = item.mode === 'direct'
         ? {
+            signal: controller.signal,
             headers: {
               'User-Agent':
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -64,9 +68,13 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
               'Cache-Control': 'no-cache',
             },
           }
-        : {};
+        : {
+            signal: controller.signal,
+          };
 
       const res = await fetch(item.url, fetchOpts);
+      clearTimeout(timeoutId);
+
       if (!res.ok) continue;
 
       let json: any = null;
