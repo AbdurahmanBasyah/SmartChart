@@ -1,4 +1,4 @@
-import { getMockStocks } from '../src/data/mockStocks';
+import { getMockStocks } from './_lib/stockEngine';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');

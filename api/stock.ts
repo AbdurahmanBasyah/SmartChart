@@ -1,5 +1,4 @@
-import { fetchYahooStockData } from '../src/services/yahooFinance';
-import { getMockStocks, buildStockData, generateCandles } from '../src/data/mockStocks';
+import { fetchYahooStockDataServer, getMockStocks, buildStockData, generateCandles } from './_lib/stockEngine';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -21,9 +20,9 @@ export default async function handler(req: any, res: any) {
 
   const yahooSymbol = cleanTicker.startsWith('^') ? cleanTicker : `${cleanTicker}.JK`;
 
-  // 1. Try fetching real market data from Yahoo Finance API
+  // 1. Try fetching real market data from Yahoo Finance API via serverless function
   try {
-    const realData = await fetchYahooStockData(cleanTicker);
+    const realData = await fetchYahooStockDataServer(cleanTicker);
     if (realData && realData.candles && realData.candles.length > 0) {
       return res.status(200).json(realData);
     }
@@ -31,7 +30,7 @@ export default async function handler(req: any, res: any) {
     console.warn(`Vercel serverless Yahoo fetch failed for ${yahooSymbol}:`, err);
   }
 
-  // 2. Check local mock dataset
+  // 2. Check local dataset
   const mockList = getMockStocks();
   const matched = mockList.find(
     (s) =>
