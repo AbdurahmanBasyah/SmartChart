@@ -41,9 +41,14 @@ export const IhsgMarketWidget: React.FC<IhsgMarketWidgetProps> = ({
       try {
         let fresh: StockData | null = null;
         try {
-          const res = await fetch('/api/stock/^JKSE');
+          const res = await fetch('/api/stock/%5EJKSE');
           if (res.ok) {
             fresh = await res.json();
+          } else {
+            const res2 = await fetch('/api/stock?symbol=^JKSE');
+            if (res2.ok) {
+              fresh = await res2.json();
+            }
           }
         } catch (e) {
           // fallback to client fetch

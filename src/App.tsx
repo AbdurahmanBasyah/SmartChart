@@ -73,7 +73,7 @@ export default function App() {
           }
         }
       } catch (e) {
-        console.warn('Failed fetching from API, loading local stock dataset:', e);
+        // Fallback to local stock data silently on static hosts
       }
 
       const initial = getMockStocks();
@@ -100,7 +100,7 @@ export default function App() {
             }
           }
         } catch (e) {
-          console.warn('Client-side market sync error:', e);
+          // silent continue
         }
       }, 1000);
     }
@@ -123,7 +123,7 @@ export default function App() {
           }
         }
       } catch (e) {
-        console.warn('Background sync failed:', e);
+        // silent continue
       }
     }, 3500);
 
@@ -137,12 +137,17 @@ export default function App() {
     try {
       let freshRealData: StockData | null = null;
       try {
-        const res = await fetch(`/api/stock/${stock.ticker}`);
+        const res = await fetch(`/api/stock/${encodeURIComponent(stock.ticker)}`);
         if (res.ok) {
           freshRealData = await res.json();
+        } else {
+          const res2 = await fetch(`/api/stock?symbol=${encodeURIComponent(stock.ticker)}`);
+          if (res2.ok) {
+            freshRealData = await res2.json();
+          }
         }
       } catch (e) {
-        console.warn('Backend API unavailable, falling back to direct client fetch:', e);
+        // Fallback to client fetch
       }
 
       // If backend API failed or unavailable (e.g. Vercel deployment), fetch client-side with CORS proxy
@@ -162,7 +167,6 @@ export default function App() {
         setSelectedStock(stock);
       }
     } catch (e) {
-      console.warn(`Failed updating real data for ${stock.ticker}:`, e);
       setSelectedStock(stock);
     } finally {
       setIsStockFetching(false);
@@ -180,12 +184,17 @@ export default function App() {
     try {
       let stockData: StockData | null = null;
       try {
-        const res = await fetch(`/api/stock/${cleanTicker}`);
+        const res = await fetch(`/api/stock/${encodeURIComponent(cleanTicker)}`);
         if (res.ok) {
           stockData = await res.json();
+        } else {
+          const res2 = await fetch(`/api/stock?symbol=${encodeURIComponent(cleanTicker)}`);
+          if (res2.ok) {
+            stockData = await res2.json();
+          }
         }
       } catch (e) {
-        console.warn('Backend API unavailable, using client fetch:', e);
+        // Fallback to client fetch
       }
 
       if (!stockData) {

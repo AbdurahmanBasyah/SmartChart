@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/api/stock/(.*)", "destination": "/api/stock?symbol=$1" },
+    { "source": "/api/stocks", "destination": "/api/stocks" },
+    { "source": "/api/screener", "destination": "/api/screener" }
+  ]
+}
