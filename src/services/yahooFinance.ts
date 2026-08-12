@@ -31,24 +31,33 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
 
   const randomUserAgent = userAgents[Math.floor(Math.random() * userAgents.length)];
 
-  // Endpoints to attempt (direct query and CORS proxies)
+  // Prepare full list of endpoints.
+  // In browser environments (e.g. Vercel static deployment), direct calls to query1/query2.finance.yahoo.com fail CORS preflight.
+  // We use CORS proxies directly in browser to avoid browser CORS errors.
+  const isBrowser = typeof window !== 'undefined';
   const targetUrls = [
     `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=1y`,
     `https://query2.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=1y`
   ];
 
-  // Prepare full list of endpoints including CORS proxies for browser/Vercel environments
   const urls: string[] = [];
-  for (const target of targetUrls) {
-    urls.push(target);
-    urls.push(`https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`);
-    urls.push(`https://corsproxy.io/?${encodeURIComponent(target)}`);
+  if (isBrowser) {
+    for (const target of targetUrls) {
+      urls.push(`https://corsproxy.io/?${encodeURIComponent(target)}`);
+      urls.push(`https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`);
+      urls.push(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`);
+    }
+  } else {
+    for (const target of targetUrls) {
+      urls.push(target);
+      urls.push(`https://corsproxy.io/?${encodeURIComponent(target)}`);
+    }
   }
 
   for (const url of urls) {
     try {
-      const isProxy = url.includes('allorigins') || url.includes('corsproxy');
-      const fetchOpts: RequestInit = isProxy
+      const isProxy = url.includes('allorigins') || url.includes('corsproxy') || url.includes('codetabs');
+      const fetchOpts: RequestInit = (isProxy || isBrowser)
         ? {}
         : {
             headers: {

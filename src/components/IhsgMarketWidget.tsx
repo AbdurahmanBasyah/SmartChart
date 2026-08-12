@@ -109,6 +109,21 @@ export const IhsgMarketWidget: React.FC<IhsgMarketWidgetProps> = ({
       {/* Background Accent Glow */}
       <div className="absolute top-0 right-0 w-80 h-80 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
 
+      {/* Lazy Load Glass Overlay Cover */}
+      {isLiveLoading && (
+        <div className="absolute inset-0 z-20 bg-slate-950/75 backdrop-blur-sm flex flex-col items-center justify-center gap-2 p-4 text-center animate-in fade-in duration-200">
+          <div className="flex items-center gap-2.5 px-4 py-2 rounded-xl bg-slate-900/90 border border-emerald-500/40 shadow-lg shadow-emerald-500/10">
+            <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
+            <span className="text-xs font-bold text-emerald-300 font-mono tracking-wide">
+              Menyiapkan & Mengabaikan Data IHSG Real-Time...
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-400 max-w-xs">
+            Menghubungkan ke API Pasar BEI & Memproses Indikator SMC
+          </p>
+        </div>
+      )}
+
       {/* Top Header Row */}
       <div className="flex flex-wrap items-center justify-between gap-4 mb-6 border-b border-slate-800/80 pb-4">
         <div className="flex items-center gap-3">

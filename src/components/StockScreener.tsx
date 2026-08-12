@@ -13,6 +13,9 @@ import {
   Zap,
   Star,
   Target,
+  Loader2,
+  Database,
+  Cpu,
 } from 'lucide-react';
 import { StockData, ScreenerFilter } from '../types';
 
@@ -22,6 +25,8 @@ interface StockScreenerProps {
   onFetchNewStock?: (ticker: string) => Promise<void>;
   watchlist?: string[];
   onToggleWatchlist?: (ticker: string) => void;
+  isStockFetching?: boolean;
+  fetchingTicker?: string;
 }
 
 // Helper to calculate SMC Signal Priority (1 = Highest Priority)
@@ -67,6 +72,8 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
   onFetchNewStock,
   watchlist = [],
   onToggleWatchlist,
+  isStockFetching = false,
+  fetchingTicker = '',
 }) => {
   const [filters, setFilters] = useState<ScreenerFilter>({
     search: '',
@@ -733,6 +740,32 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
           </div>
         )}
       </div>
+
+      {/* Fetching Market Data Modal for Screener */}
+      {(isFetchingApi || isStockFetching) && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-slate-900 border border-emerald-500/40 rounded-2xl p-6 shadow-2xl shadow-emerald-500/20 text-slate-100 relative overflow-hidden text-center">
+            <div className="absolute -top-16 -left-16 w-32 h-32 bg-emerald-500/20 rounded-full blur-2xl pointer-events-none" />
+            <div className="absolute -bottom-16 -right-16 w-32 h-32 bg-cyan-500/20 rounded-full blur-2xl pointer-events-none" />
+
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center mx-auto mb-4 shadow-inner">
+              <Loader2 className="w-6 h-6 animate-spin" />
+            </div>
+
+            <h3 className="text-lg font-black text-white mb-1">
+              Sinkronisasi Data Saham BEI ({fetchingTicker || filters.search.toUpperCase() || 'IDX'})
+            </h3>
+            <p className="text-xs text-slate-400 max-w-xs mx-auto mb-5 leading-relaxed">
+              Sedang mengambil harga & candle historis dari API Pasar Saham Indonesia, serta memetakan indikator FVG, Order Block & Volume Confirmation...
+            </p>
+
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 text-[11px] font-mono text-emerald-300 flex items-center justify-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              <span>Memproses SMC Indicator Engine...</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

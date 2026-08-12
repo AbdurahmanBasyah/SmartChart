@@ -277,15 +277,22 @@ export default function App() {
         {activeTab === 'chart' && (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
             {isStockFetching ? (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center flex flex-col items-center justify-center gap-4 min-h-[500px]">
-                <Loader2 className="w-10 h-10 text-emerald-400 animate-spin" />
+              <div className="bg-slate-900/90 border border-emerald-500/30 rounded-2xl p-12 text-center flex flex-col items-center justify-center gap-4 min-h-[520px] shadow-2xl relative overflow-hidden backdrop-blur-md">
+                <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+                <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shadow-inner">
+                  <Loader2 className="w-7 h-7 animate-spin" />
+                </div>
                 <div>
-                  <div className="text-base font-bold text-white mb-1">
-                    Loading Real IDX Market Data ({fetchingTicker || selectedStock.ticker})
+                  <div className="text-lg font-black text-white mb-1">
+                    Menyiapkan Data Pasar BEI & Structure SMC ({fetchingTicker || selectedStock.ticker})
                   </div>
-                  <div className="text-xs text-slate-400">
-                    Connecting to Market API & Processing SMC Indicators...
+                  <div className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                    Sedang mengunduh data OHLCV pasar real-time dari API BEI, memetakan Fair Value Gap (FVG), Order Block (OB), dan kalkulasi otomatis Risk-Reward Ratio...
                   </div>
+                </div>
+                <div className="mt-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-mono text-emerald-300 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                  <span>SMC Engine: Menyiapkan Data...</span>
                 </div>
               </div>
             ) : (
@@ -335,6 +342,8 @@ export default function App() {
               onFetchNewStock={handleFetchNewStock}
               watchlist={watchlist}
               onToggleWatchlist={handleToggleWatchlist}
+              isStockFetching={isStockFetching}
+              fetchingTicker={fetchingTicker}
             />
           </div>
         )}
