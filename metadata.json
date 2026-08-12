@@ -1,1 +1,6 @@
-{"name":"IDX Smart Money Concepts Tracker","description":"SmartChart - IDX Smart Money Concepts (SMC) technical analysis \u0026 stock screener for Indonesian stocks with FVG, Order Block, BOS, CHoCH, and interactive trading charts.","requestFramePermissions":[],"majorCapabilities":["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]}
+{
+    "name": "SmartChart",
+    "description": "SmartChart - IDX Smart Money Concepts (SMC) technical analysis & stock screener for Indonesian stocks with FVG, Order Block, BOS, CHoCH, and interactive trading charts.",
+    "requestFramePermissions": [],
+    "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
