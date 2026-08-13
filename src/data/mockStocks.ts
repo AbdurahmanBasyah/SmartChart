@@ -19,7 +19,7 @@ function seededRandom(seed: number) {
   return x - Math.floor(x);
 }
 
-function formatJakartaDate(dateOrTimestamp: Date | number): string {
+export function formatJakartaDate(dateOrTimestamp: Date | number): string {
   const date = typeof dateOrTimestamp === 'number' ? new Date(dateOrTimestamp * 1000) : dateOrTimestamp;
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(date);
 }

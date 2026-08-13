@@ -1,5 +1,5 @@
 import { Candle, StockData } from '../types';
-import { buildStockData, generateCandles, liquidIDXStocks } from '../data/mockStocks';
+import { buildStockData, generateCandles, liquidIDXStocks, getLatestClosedTradingDateStr, formatJakartaDate } from '../data/mockStocks';
 import { roundToIdxTick } from '../utils/idxTickRules';
 
 export interface YahooStockMeta {
@@ -13,7 +13,7 @@ export interface YahooStockMeta {
 
 /**
  * Fetches real delayed daily candle data for IDX stock tickers (e.g. BBCA, BRPT, BBRI)
- * from Yahoo Finance API (free, no API key needed).
+ * from Yahoo Finance API or local/Vercel server API.
  */
 export async function fetchYahooStockData(ticker: string): Promise<StockData | null> {
   let cleanTicker = ticker.trim().toUpperCase().replace('.JK', '');
@@ -22,40 +22,69 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
   }
 
   const yahooSymbol = cleanTicker.startsWith('^') ? cleanTicker : `${cleanTicker}.JK`;
+  const isBrowser = typeof window !== 'undefined';
 
+  // 1. In Browser: Prefer internal /api/stock endpoint first (fast, pre-calculated SMC, zero CORS issues)
+  if (isBrowser) {
+    try {
+      const apiEndpoints = [
+        `/api/stock?symbol=${encodeURIComponent(cleanTicker)}`,
+        `/api/stock/${encodeURIComponent(cleanTicker)}`,
+      ];
+      for (const ep of apiEndpoints) {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 3500);
+          const res = await fetch(ep, { signal: controller.signal });
+          clearTimeout(timer);
+          if (res.ok) {
+            const data: StockData = await res.json();
+            if (data && data.candles && data.candles.length > 0) {
+              return data;
+            }
+          }
+        } catch (e) {
+          // continue to next endpoint
+        }
+      }
+    } catch (e) {
+      // continue to fallback
+    }
+  }
+
+  // 2. Direct Yahoo Finance endpoints
   const targetUrls = [
     `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=1y&includePrePost=true&useYfid=true`,
     `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=1y&includePrePost=true&useYfid=true`
   ];
 
-  const isBrowser = typeof window !== 'undefined';
-
   // Build candidate fetch URLs depending on environment
   const candidates: { url: string; mode: 'direct' | 'allorigins' | 'raw_proxy' }[] = [];
 
-  if (!isBrowser) {
-    // Node environment (Server / Vercel Serverless Function) - Direct fetch is fast and safe
+  // Direct fetch (works on Node / Serverless / browser if allowed)
+  for (const target of targetUrls) {
+    candidates.push({ url: target, mode: 'direct' });
+  }
+
+  if (isBrowser) {
     for (const target of targetUrls) {
-      candidates.push({ url: target, mode: 'direct' });
+      candidates.push({
+        url: `https://api.allorigins.win/get?url=${encodeURIComponent(target)}`,
+        mode: 'allorigins'
+      });
+      candidates.push({
+        url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`,
+        mode: 'raw_proxy'
+      });
     }
   }
 
-  // Browser & Serverless proxy fallbacks
-  for (const target of targetUrls) {
-    candidates.push({
-      url: `https://api.allorigins.win/get?url=${encodeURIComponent(target)}`,
-      mode: 'allorigins'
-    });
-    candidates.push({
-      url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`,
-      mode: 'raw_proxy'
-    });
-  }
+  const maxAllowedDateStr = getLatestClosedTradingDateStr();
 
   for (const item of candidates) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2500);
+      const timeoutId = setTimeout(() => controller.abort(), 2800);
 
       const fetchOpts: RequestInit = item.mode === 'direct'
         ? {
@@ -101,80 +130,6 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
       const volumes: (number | null)[] = quote.volume || [];
 
       const candles: Candle[] = [];
-
-function formatJakartaDate(dateOrTimestamp: Date | number): string {
-  const date = typeof dateOrTimestamp === 'number' ? new Date(dateOrTimestamp * 1000) : dateOrTimestamp;
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(date);
-}
-
-function isIdxMarketClosedToday(now: Date = new Date()): boolean {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Jakarta',
-    weekday: 'short',
-    hour: 'numeric',
-    minute: 'numeric',
-    hour12: false,
-  }).formatToParts(now);
-
-  let weekday = 'Mon';
-  let hour = 0;
-  let minute = 0;
-
-  for (const p of parts) {
-    if (p.type === 'weekday') weekday = p.value;
-    if (p.type === 'hour') hour = parseInt(p.value, 10);
-    if (p.type === 'minute') minute = parseInt(p.value, 10);
-  }
-
-  if (weekday === 'Sat' || weekday === 'Sun') return false;
-  return (hour * 60 + minute) >= (16 * 60);
-}
-
-function getLatestClosedTradingDateStr(now: Date = new Date()): string {
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Jakarta',
-    year: 'numeric',
-    month: 'numeric',
-    day: 'numeric',
-    weekday: 'short',
-    hour: 'numeric',
-    minute: 'numeric',
-    hour12: false,
-  });
-
-  const parts = formatter.formatToParts(now);
-  let year = 2026, month = 1, day = 1, weekday = 'Mon', hour = 0, minute = 0;
-  for (const p of parts) {
-    if (p.type === 'year') year = parseInt(p.value, 10);
-    if (p.type === 'month') month = parseInt(p.value, 10);
-    if (p.type === 'day') day = parseInt(p.value, 10);
-    if (p.type === 'weekday') weekday = p.value;
-    if (p.type === 'hour') hour = parseInt(p.value, 10);
-    if (p.type === 'minute') minute = parseInt(p.value, 10);
-  }
-
-  const isAfterClose = (hour * 60 + minute) >= (16 * 60);
-
-  let daysToSubtract = 0;
-  if (weekday === 'Sun') {
-    daysToSubtract = 2;
-  } else if (weekday === 'Sat') {
-    daysToSubtract = 1;
-  } else if (weekday === 'Mon') {
-    daysToSubtract = isAfterClose ? 0 : 3;
-  } else {
-    daysToSubtract = isAfterClose ? 0 : 1;
-  }
-
-  const targetDate = new Date(Date.UTC(year, month - 1, day));
-  targetDate.setUTCDate(targetDate.getUTCDate() - daysToSubtract);
-  const y = targetDate.getUTCFullYear();
-  const m = String(targetDate.getUTCMonth() + 1).padStart(2, '0');
-  const d = String(targetDate.getUTCDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
-      const maxAllowedDateStr = getLatestClosedTradingDateStr();
 
       for (let i = 0; i < timestamps.length; i++) {
         const o = opens[i];

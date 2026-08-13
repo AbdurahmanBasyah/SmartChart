@@ -83,10 +83,10 @@ async function startServer() {
     res.json({ success: true, count: list.length });
   });
 
-  // Get specific stock data by ticker (e.g., BRPT, ^JKSE, or IHSG)
-  app.get('/api/stock/:symbol', async (req, res) => {
-    const rawSymbol = req.params.symbol.trim().toUpperCase();
-    let cleanTicker = rawSymbol.replace('.JK', '');
+  // Get specific stock data by ticker (supports both /api/stock/:symbol and /api/stock?symbol=...)
+  const handleStockRequest = async (req: express.Request, res: express.Response) => {
+    const rawSymbol = (req.params.symbol || req.query.symbol || req.query.ticker || 'IHSG') as string;
+    let cleanTicker = rawSymbol.trim().toUpperCase().replace('.JK', '');
     if (cleanTicker === 'IHSG' || cleanTicker === 'JKSE' || cleanTicker === '^JKSE') {
       cleanTicker = '^JKSE';
     }
@@ -130,7 +130,10 @@ async function startServer() {
 
     stockCache.set(cleanTicker, fallbackStock);
     return res.json(fallbackStock);
-  });
+  };
+
+  app.get('/api/stock', handleStockRequest);
+  app.get('/api/stock/:symbol', handleStockRequest);
 
   // Screener route
   app.get('/api/screener', (req, res) => {
