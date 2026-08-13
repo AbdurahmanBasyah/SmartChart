@@ -122,6 +122,116 @@ function calculateVWAP(candles: Candle[]): (number | null)[] {
   return result;
 }
 
+export function formatJakartaDate(dateOrTimestamp: Date | number): string {
+  const date = typeof dateOrTimestamp === 'number' ? new Date(dateOrTimestamp * 1000) : dateOrTimestamp;
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(date);
+}
+
+/**
+ * Checks if Indonesian Stock Exchange (IDX) has officially closed today.
+ * IDX trading closes at 16:00 WIB (Session 2 & post-trading close).
+ */
+export function isIdxMarketClosedToday(now: Date = new Date()): boolean {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta',
+    weekday: 'short',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  }).formatToParts(now);
+
+  let weekday = 'Mon';
+  let hour = 0;
+  let minute = 0;
+
+  for (const p of parts) {
+    if (p.type === 'weekday') weekday = p.value;
+    if (p.type === 'hour') hour = parseInt(p.value, 10);
+    if (p.type === 'minute') minute = parseInt(p.value, 10);
+  }
+
+  // Weekends are not active trading days
+  if (weekday === 'Sat' || weekday === 'Sun') {
+    return false;
+  }
+
+  // Weekday close threshold: 16:00 WIB (4:00 PM)
+  return (hour * 60 + minute) >= (16 * 60);
+}
+
+/**
+ * Returns the Date object of the most recent completed/closed trading day in WIB.
+ * If opened in the morning (e.g. before 16:00 WIB), returns yesterday (or Friday).
+ */
+export function getLatestClosedTradingDate(now: Date = new Date()): Date {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    weekday: 'short',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(now);
+  let year = 2026, month = 1, day = 1, weekday = 'Mon', hour = 0, minute = 0;
+  for (const p of parts) {
+    if (p.type === 'year') year = parseInt(p.value, 10);
+    if (p.type === 'month') month = parseInt(p.value, 10);
+    if (p.type === 'day') day = parseInt(p.value, 10);
+    if (p.type === 'weekday') weekday = p.value;
+    if (p.type === 'hour') hour = parseInt(p.value, 10);
+    if (p.type === 'minute') minute = parseInt(p.value, 10);
+  }
+
+  const isAfterClose = (hour * 60 + minute) >= (16 * 60);
+
+  let daysToSubtract = 0;
+  if (weekday === 'Sun') {
+    daysToSubtract = 2; // Last Friday
+  } else if (weekday === 'Sat') {
+    daysToSubtract = 1; // Last Friday
+  } else if (weekday === 'Mon') {
+    daysToSubtract = isAfterClose ? 0 : 3; // Friday if before 16:00, Monday if after 16:00
+  } else {
+    // Tue, Wed, Thu, Fri
+    daysToSubtract = isAfterClose ? 0 : 1; // Yesterday if before 16:00, Today if after 16:00
+  }
+
+  const targetDate = new Date(Date.UTC(year, month - 1, day));
+  targetDate.setUTCDate(targetDate.getUTCDate() - daysToSubtract);
+  return targetDate;
+}
+
+export function getLatestClosedTradingDateStr(now: Date = new Date()): string {
+  const d = getLatestClosedTradingDate(now);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export function getTradingDayDates(count: number, latestDateStr: string): string[] {
+  const [y, m, d] = latestDateStr.split('-').map(Number);
+  const cur = new Date(Date.UTC(y, m - 1, d));
+  const dates: string[] = [];
+
+  while (dates.length < count) {
+    const dayOfWeek = cur.getUTCDay(); // 0 = Sun, 6 = Sat
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+      const cy = cur.getUTCFullYear();
+      const cm = String(cur.getUTCMonth() + 1).padStart(2, '0');
+      const cd = String(cur.getUTCDate()).padStart(2, '0');
+      dates.push(`${cy}-${cm}-${cd}`);
+    }
+    cur.setUTCDate(cur.getUTCDate() - 1);
+  }
+
+  return dates.reverse();
+}
+
 export function generateCandles(
   basePrice: number,
   volatility: number = 0.025,
@@ -130,11 +240,11 @@ export function generateCandles(
 ): Candle[] {
   const candles: Candle[] = [];
   let currentPrice = basePrice;
-  const startDate = new Date();
-  startDate.setDate(startDate.getDate() - days);
+  const latestDateStr = getLatestClosedTradingDateStr();
+  const tradingDates = getTradingDayDates(days, latestDateStr);
 
-  for (let i = 0; i < days; i++) {
-    const dateStr = new Date(startDate.getTime() + i * 86400000).toISOString().split('T')[0];
+  for (let i = 0; i < tradingDates.length; i++) {
+    const dateStr = tradingDates[i];
     const rand = Math.sin(i * 12.345 + 1.2) * 0.5 + 0.5 - 0.48;
     const change = rand * volatility + trendBias;
 
@@ -259,8 +369,8 @@ export async function fetchYahooStockDataServer(rawTicker: string): Promise<Stoc
   const yahooSymbol = cleanTicker.startsWith('^') ? cleanTicker : `${cleanTicker}.JK`;
 
   const targets = [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=1y`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=1y`,
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=1y&includePrePost=true&useYfid=true`,
+    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=1y&includePrePost=true&useYfid=true`,
   ];
 
   for (const target of targets) {
@@ -295,6 +405,8 @@ export async function fetchYahooStockDataServer(rawTicker: string): Promise<Stoc
       const closes: (number | null)[] = quote.close || [];
       const volumes: (number | null)[] = quote.volume || [];
 
+      const maxAllowedDateStr = getLatestClosedTradingDateStr();
+
       const candles: Candle[] = [];
       for (let i = 0; i < timestamps.length; i++) {
         const o = opens[i];
@@ -305,7 +417,10 @@ export async function fetchYahooStockDataServer(rawTicker: string): Promise<Stoc
 
         if (o == null || h == null || l == null || c == null || c <= 0) continue;
 
-        const dateStr = new Date(timestamps[i] * 1000).toISOString().split('T')[0];
+        const dateStr = formatJakartaDate(timestamps[i]);
+        // Discard any future or unclosed intraday dates
+        if (dateStr > maxAllowedDateStr) continue;
+
         candles.push({
           time: dateStr,
           open: Math.round(o),
@@ -316,8 +431,40 @@ export async function fetchYahooStockDataServer(rawTicker: string): Promise<Stoc
         });
       }
 
+      // Check meta for real-time / live market price updates that fall on or before the max allowed closed date
+      const meta = result.meta || {};
+      const latestPrice = meta.regularMarketPrice;
+      const latestTime = meta.regularMarketTime;
+
+      if (latestPrice && latestTime) {
+        const metaDateStr = formatJakartaDate(latestTime);
+        if (metaDateStr <= maxAllowedDateStr) {
+          const lastCandle = candles[candles.length - 1];
+
+          if (!lastCandle || lastCandle.time < metaDateStr) {
+            const openPrice = meta.regularMarketDayOpen || lastCandle?.close || latestPrice;
+            const highPrice = meta.regularMarketDayHigh || Math.max(openPrice, latestPrice);
+            const lowPrice = meta.regularMarketDayLow || Math.min(openPrice, latestPrice);
+            const vol = meta.regularMarketVolume || 1000000;
+
+            candles.push({
+              time: metaDateStr,
+              open: Math.round(openPrice),
+              high: Math.round(highPrice),
+              low: Math.round(lowPrice),
+              close: Math.round(latestPrice),
+              volume: Math.round(vol),
+            });
+          } else if (lastCandle.time === metaDateStr) {
+            lastCandle.close = Math.round(latestPrice);
+            if (meta.regularMarketDayHigh) lastCandle.high = Math.round(meta.regularMarketDayHigh);
+            if (meta.regularMarketDayLow) lastCandle.low = Math.round(meta.regularMarketDayLow);
+            if (meta.regularMarketVolume) lastCandle.volume = Math.round(meta.regularMarketVolume);
+          }
+        }
+      }
+
       if (candles.length >= 10) {
-        const meta = result.meta || {};
         const isIhsg = cleanTicker === '^JKSE';
         const finalTicker = isIhsg ? 'IHSG' : cleanTicker;
         const companyName = isIhsg

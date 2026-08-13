@@ -19,6 +19,75 @@ function seededRandom(seed: number) {
   return x - Math.floor(x);
 }
 
+function formatJakartaDate(dateOrTimestamp: Date | number): string {
+  const date = typeof dateOrTimestamp === 'number' ? new Date(dateOrTimestamp * 1000) : dateOrTimestamp;
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(date);
+}
+
+export function getLatestClosedTradingDateStr(now: Date = new Date()): string {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    weekday: 'short',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(now);
+  let year = 2026, month = 1, day = 1, weekday = 'Mon', hour = 0, minute = 0;
+  for (const p of parts) {
+    if (p.type === 'year') year = parseInt(p.value, 10);
+    if (p.type === 'month') month = parseInt(p.value, 10);
+    if (p.type === 'day') day = parseInt(p.value, 10);
+    if (p.type === 'weekday') weekday = p.value;
+    if (p.type === 'hour') hour = parseInt(p.value, 10);
+    if (p.type === 'minute') minute = parseInt(p.value, 10);
+  }
+
+  const isAfterClose = (hour * 60 + minute) >= (16 * 60);
+
+  let daysToSubtract = 0;
+  if (weekday === 'Sun') {
+    daysToSubtract = 2; // Friday
+  } else if (weekday === 'Sat') {
+    daysToSubtract = 1; // Friday
+  } else if (weekday === 'Mon') {
+    daysToSubtract = isAfterClose ? 0 : 3; // Friday if before 16:00, Monday if after 16:00
+  } else {
+    // Tue, Wed, Thu, Fri
+    daysToSubtract = isAfterClose ? 0 : 1; // Yesterday if before 16:00, Today if after 16:00
+  }
+
+  const targetDate = new Date(Date.UTC(year, month - 1, day));
+  targetDate.setUTCDate(targetDate.getUTCDate() - daysToSubtract);
+  const y = targetDate.getUTCFullYear();
+  const m = String(targetDate.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(targetDate.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export function getTradingDayDates(count: number, latestDateStr: string): string[] {
+  const [y, m, d] = latestDateStr.split('-').map(Number);
+  const cur = new Date(Date.UTC(y, m - 1, d));
+  const dates: string[] = [];
+
+  while (dates.length < count) {
+    const dayOfWeek = cur.getUTCDay(); // 0 = Sun, 6 = Sat
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+      const cy = cur.getUTCFullYear();
+      const cm = String(cur.getUTCMonth() + 1).padStart(2, '0');
+      const cd = String(cur.getUTCDate()).padStart(2, '0');
+      dates.push(`${cy}-${cm}-${cd}`);
+    }
+    cur.setUTCDate(cur.getUTCDate() - 1);
+  }
+
+  return dates.reverse();
+}
+
 /**
  * Generates realistic candle data for IDX stocks
  */
@@ -30,11 +99,11 @@ export function generateCandles(
 ): Candle[] {
   const candles: Candle[] = [];
   let currentPrice = basePrice;
-  const startDate = new Date();
-  startDate.setDate(startDate.getDate() - days);
+  const latestDateStr = getLatestClosedTradingDateStr();
+  const tradingDates = getTradingDayDates(days, latestDateStr);
 
-  for (let i = 0; i < days; i++) {
-    const dateStr = new Date(startDate.getTime() + i * 86400000).toISOString().split("T")[0];
+  for (let i = 0; i < tradingDates.length; i++) {
+    const dateStr = tradingDates[i];
 
     let cycle = Math.sin(i / 8) * (volatility * 1.5);
     if (i > 70 && i < 85) cycle -= volatility * 1.2;

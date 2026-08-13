@@ -142,12 +142,12 @@ export const IhsgMarketWidget: React.FC<IhsgMarketWidgetProps> = ({
                 {isLiveLoading ? (
                   <>
                     <Loader2 className="w-3 h-3 text-emerald-400 animate-spin" />
-                    <span>Live Syncing...</span>
+                    <span>Syncing Data BEI...</span>
                   </>
                 ) : (
                   <>
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span>Live Market Data</span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                    <span>Data Close Market (Daily)</span>
                   </>
                 )}
               </span>

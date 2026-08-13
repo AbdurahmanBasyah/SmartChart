@@ -1,25 +1,22 @@
-import { getMockStocks } from "../src/data/mockStocks";
+import { getMockStocks } from './_lib/stockEngine.js';
 
 export default async function handler(req: any, res: any) {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
 
-    if (req.method === "OPTIONS") {
-        return res.status(200).end();
-    }
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
 
-    try {
-        const stocks = getMockStocks();
-        return res.status(200).json(stocks);
-    } catch (error) {
-        console.error("API /stocks handler error:", error);
-        // Always return valid stock array even on unexpected runtime error to guarantee 200 OK
-        try {
-            const fallback = getMockStocks(30);
-            return res.status(200).json(fallback);
-        } catch (e) {
-            return res.status(200).json([]);
-        }
-    }
+  try {
+    const stocks = getMockStocks();
+    return res.status(200).json(stocks);
+  } catch (error) {
+    console.error('API /stocks handler error:', error);
+    return res.status(200).json([]);
+  }
 }

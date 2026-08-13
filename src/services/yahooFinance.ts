@@ -24,8 +24,8 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
   const yahooSymbol = cleanTicker.startsWith('^') ? cleanTicker : `${cleanTicker}.JK`;
 
   const targetUrls = [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=1y`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=1y`
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=1y&includePrePost=true&useYfid=true`,
+    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=1y&includePrePost=true&useYfid=true`
   ];
 
   const isBrowser = typeof window !== 'undefined';
@@ -102,6 +102,80 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
 
       const candles: Candle[] = [];
 
+function formatJakartaDate(dateOrTimestamp: Date | number): string {
+  const date = typeof dateOrTimestamp === 'number' ? new Date(dateOrTimestamp * 1000) : dateOrTimestamp;
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(date);
+}
+
+function isIdxMarketClosedToday(now: Date = new Date()): boolean {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta',
+    weekday: 'short',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  }).formatToParts(now);
+
+  let weekday = 'Mon';
+  let hour = 0;
+  let minute = 0;
+
+  for (const p of parts) {
+    if (p.type === 'weekday') weekday = p.value;
+    if (p.type === 'hour') hour = parseInt(p.value, 10);
+    if (p.type === 'minute') minute = parseInt(p.value, 10);
+  }
+
+  if (weekday === 'Sat' || weekday === 'Sun') return false;
+  return (hour * 60 + minute) >= (16 * 60);
+}
+
+function getLatestClosedTradingDateStr(now: Date = new Date()): string {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    weekday: 'short',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(now);
+  let year = 2026, month = 1, day = 1, weekday = 'Mon', hour = 0, minute = 0;
+  for (const p of parts) {
+    if (p.type === 'year') year = parseInt(p.value, 10);
+    if (p.type === 'month') month = parseInt(p.value, 10);
+    if (p.type === 'day') day = parseInt(p.value, 10);
+    if (p.type === 'weekday') weekday = p.value;
+    if (p.type === 'hour') hour = parseInt(p.value, 10);
+    if (p.type === 'minute') minute = parseInt(p.value, 10);
+  }
+
+  const isAfterClose = (hour * 60 + minute) >= (16 * 60);
+
+  let daysToSubtract = 0;
+  if (weekday === 'Sun') {
+    daysToSubtract = 2;
+  } else if (weekday === 'Sat') {
+    daysToSubtract = 1;
+  } else if (weekday === 'Mon') {
+    daysToSubtract = isAfterClose ? 0 : 3;
+  } else {
+    daysToSubtract = isAfterClose ? 0 : 1;
+  }
+
+  const targetDate = new Date(Date.UTC(year, month - 1, day));
+  targetDate.setUTCDate(targetDate.getUTCDate() - daysToSubtract);
+  const y = targetDate.getUTCFullYear();
+  const m = String(targetDate.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(targetDate.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+      const maxAllowedDateStr = getLatestClosedTradingDateStr();
+
       for (let i = 0; i < timestamps.length; i++) {
         const o = opens[i];
         const h = highs[i];
@@ -110,8 +184,8 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
         const v = volumes[i];
 
         if (o != null && h != null && l != null && c != null && c > 0) {
-          const date = new Date(timestamps[i] * 1000);
-          const dateStr = date.toISOString().split('T')[0];
+          const dateStr = formatJakartaDate(timestamps[i]);
+          if (dateStr > maxAllowedDateStr) continue;
 
           candles.push({
             time: dateStr,
@@ -124,8 +198,39 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
         }
       }
 
+      const meta = result.meta || {};
+      const latestPrice = meta.regularMarketPrice;
+      const latestTime = meta.regularMarketTime;
+
+      if (latestPrice && latestTime) {
+        const metaDateStr = formatJakartaDate(latestTime);
+        if (metaDateStr <= maxAllowedDateStr) {
+          const lastCandle = candles[candles.length - 1];
+
+          if (!lastCandle || lastCandle.time < metaDateStr) {
+            const openPrice = meta.regularMarketDayOpen || lastCandle?.close || latestPrice;
+            const highPrice = meta.regularMarketDayHigh || Math.max(openPrice, latestPrice);
+            const lowPrice = meta.regularMarketDayLow || Math.min(openPrice, latestPrice);
+            const vol = meta.regularMarketVolume || 1000000;
+
+            candles.push({
+              time: metaDateStr,
+              open: roundToIdxTick(openPrice),
+              high: roundToIdxTick(highPrice),
+              low: roundToIdxTick(lowPrice),
+              close: roundToIdxTick(latestPrice),
+              volume: Math.round(vol),
+            });
+          } else if (lastCandle.time === metaDateStr) {
+            lastCandle.close = roundToIdxTick(latestPrice);
+            if (meta.regularMarketDayHigh) lastCandle.high = roundToIdxTick(meta.regularMarketDayHigh);
+            if (meta.regularMarketDayLow) lastCandle.low = roundToIdxTick(meta.regularMarketDayLow);
+            if (meta.regularMarketVolume) lastCandle.volume = Math.round(meta.regularMarketVolume);
+          }
+        }
+      }
+
       if (candles.length >= 10) {
-        const meta = result.meta || {};
         const isIhsg = cleanTicker === '^JKSE';
         const companyName = isIhsg
           ? 'Indeks Harga Saham Gabungan (IHSG)'

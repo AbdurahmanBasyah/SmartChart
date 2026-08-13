@@ -249,14 +249,14 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
 
     // Chart Dimensions Layout
     const paddingRight = 85; // Right price axis width
-    const paddingBottom = 60; // Bottom volume & time axis height
-    const paddingTop = 30;
+    const paddingBottom = 36; // Bottom volume & time axis height
+    const paddingTop = 26;
     const paddingLeft = 15;
 
     const chartWidth = width - paddingLeft - paddingRight;
     const chartHeight = height - paddingTop - paddingBottom;
-    const volumeHeight = chartHeight * 0.22;
-    const priceChartHeight = chartHeight * 0.78;
+    const volumeHeight = Math.max(50, Math.min(100, Math.round(chartHeight * 0.22)));
+    const priceChartHeight = chartHeight - volumeHeight;
 
     // Calculate visible candles range
     const baseCandleWidth = 10;
@@ -621,6 +621,37 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
     ctx.strokeStyle = '#f59e0b';
     ctx.lineWidth = 1.2;
     ctx.stroke();
+
+    // --- DRAW VOLUME PANE SEPARATOR & VOLUME LABELS ---
+    const volPaneTop = paddingTop + priceChartHeight;
+    ctx.strokeStyle = 'rgba(51, 65, 85, 0.6)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(paddingLeft, volPaneTop);
+    ctx.lineTo(width - paddingRight, volPaneTop);
+    ctx.stroke();
+
+    // Volume pane title & Max Vol metric
+    ctx.fillStyle = '#64748b';
+    ctx.font = '10px Inter, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('Vol / MA20', paddingLeft + 4, volPaneTop + 13);
+
+    const formatVolShort = (v: number) => {
+      if (v >= 1e9) return `${(v / 1e9).toFixed(2)}B`;
+      if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
+      if (v >= 1e3) return `${(v / 1e3).toFixed(0)}K`;
+      return Math.round(v).toString();
+    };
+
+    ctx.textAlign = 'right';
+    ctx.fillText(`Max Vol: ${formatVolShort(maxVol)}`, width - paddingRight - 8, volPaneTop + 13);
+
+    // Right axis Volume tick mark
+    ctx.fillStyle = '#64748b';
+    ctx.font = '9px Inter, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(formatVolShort(maxVol), width - paddingRight + 8, volPaneTop + 12);
 
     // --- DRAW TICKER & STOCK INFO BADGE DIRECTLY ON CANVAS (FOR COPIED IMAGES) ---
     ctx.save();
@@ -1387,7 +1418,7 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
       </div>
 
       {/* Main Interactive Canvas Area */}
-      <div ref={containerRef} className="relative flex-1 bg-slate-950">
+      <div ref={containerRef} className="relative flex-1 bg-slate-950 min-h-0">
         <canvas
           ref={canvasRef}
           onMouseDown={handleMouseDown}
@@ -1422,7 +1453,7 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
 
         {/* Hover Candle Data Readout Tooltip */}
         {hoveredCandle && (
-          <div className="absolute top-3 left-4 bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 shadow-xl text-[11px] font-mono flex items-center gap-4 z-20 backdrop-blur-md">
+          <div className="absolute top-3 left-4 bg-slate-900/95 border border-slate-700/80 rounded-xl p-2.5 shadow-xl text-[11px] font-mono flex items-center gap-4 z-20 backdrop-blur-md">
             <span className="text-slate-400">{hoveredCandle.candle.time}</span>
             <span className="text-slate-200">
               O: <strong className="text-white">{hoveredCandle.candle.open}</strong>
@@ -1441,35 +1472,39 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
             </span>
           </div>
         )}
+      </div>
 
-        {/* Chart Legend Footer */}
-        <div className="absolute bottom-2 left-4 right-20 bg-slate-950/80 border border-slate-800/80 rounded-lg px-3 py-1.5 text-[10px] font-mono text-slate-400 flex flex-wrap items-center justify-between gap-3 pointer-events-none z-10">
-          <div className="flex items-center gap-4">
-            <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded bg-emerald-500/40 border border-emerald-400 inline-block" />
-              <span>Bullish FVG</span>
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded bg-sky-500/40 border border-sky-400 inline-block" />
-              <span>Price Gap</span>
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded bg-purple-500/40 border border-purple-400 inline-block" />
-              <span>Demand Order Block (POI)</span>
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-0.5 bg-amber-400 inline-block" />
-              <span>CHoCH Line</span>
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-0.5 bg-sky-400 inline-block" />
-              <span>BOS Line</span>
-            </span>
-          </div>
+      {/* Chart Legend Footer - Dedicated bar outside canvas to prevent cutting off volume */}
+      <div className="bg-slate-950 border-t border-slate-800/90 px-4 py-2 text-[11px] font-mono text-slate-400 flex flex-wrap items-center justify-between gap-3 shrink-0 select-none z-10">
+        <div className="flex items-center gap-3.5 flex-wrap">
+          <span className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded bg-emerald-500/40 border border-emerald-400 inline-block" />
+            <span>Bullish FVG</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded bg-sky-500/40 border border-sky-400 inline-block" />
+            <span>Price Gap</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded bg-purple-500/40 border border-purple-400 inline-block" />
+            <span>Order Block (POI)</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-3 h-0.5 bg-amber-400 inline-block" />
+            <span>CHoCH</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-3 h-0.5 bg-sky-400 inline-block" />
+            <span>BOS</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-sm border border-amber-500 bg-amber-500/20 inline-block" />
+            <span>Vol Spike (&gt;1.3x MA20)</span>
+          </span>
+        </div>
 
-          <div className="text-slate-300 font-bold">
-            LONG Position: R:R 1:{stock?.recommendation?.riskRewardRatio ?? 0} | TP1 +10% | TP2 +20% | SL 4%
-          </div>
+        <div className="text-slate-300 font-medium">
+          LONG Setup: R:R 1:{stock?.recommendation?.riskRewardRatio ?? 0} | TP1 +10% | TP2 +20% | SL 4%
         </div>
       </div>
     </div>
