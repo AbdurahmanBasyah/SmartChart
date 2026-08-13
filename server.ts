@@ -57,6 +57,17 @@ async function startServer() {
   // Populate liquid stocks in cache synchronously on boot
   refreshLocalFallback();
 
+  // Kick off background market data preloading
+  preloadRealMarketData().catch((err) => console.error('Error preloading real market data on boot:', err));
+
+  // No-cache middleware for dynamic API routes
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+  });
+
   // API Routes
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });

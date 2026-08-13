@@ -396,8 +396,8 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
     }
 
     // --- DRAW FAIR VALUE GAPS (FVG) ---
-    if (showFvg) {
-      stock.fvgs
+    if (showFvg && stock?.fvgs) {
+      (stock.fvgs || [])
         .filter((fvg) => !fvg.mitigated)
         .forEach((fvg) => {
         if (fvg.endIndex >= startIndex && fvg.startIndex <= endIndex) {
@@ -428,8 +428,8 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
     }
 
     // --- DRAW ORDINARY PRICE GAPS ---
-    if (showGaps && stock.priceGaps) {
-      stock.priceGaps
+    if (showGaps && stock?.priceGaps) {
+      (stock.priceGaps || [])
         .filter((gap) => !gap.mitigated)
         .forEach((gap) => {
         if (gap.endIndex >= startIndex && gap.startIndex <= endIndex) {
@@ -460,8 +460,8 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
     }
 
     // --- DRAW ORDER BLOCKS (POI Demand / Supply Zones) ---
-    if (showOrderBlocks) {
-      stock.orderBlocks
+    if (showOrderBlocks && stock?.orderBlocks) {
+      (stock.orderBlocks || [])
         .filter((ob) => !ob.mitigated)
         .forEach((ob) => {
         if (ob.endIndex >= startIndex && ob.startIndex <= endIndex) {
@@ -491,10 +491,10 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
     }
 
     // --- DRAW BOS & CHOCH LINES ---
-    if (showBosChoch) {
+    if (showBosChoch && stock?.bosChochLines) {
       const drawnLabelPositions: { x: number; y: number }[] = [];
 
-      stock.bosChochLines.forEach((line) => {
+      (stock.bosChochLines || []).forEach((line) => {
         if (line.endIndex >= startIndex && line.startIndex <= endIndex) {
           const startX = getX(line.startIndex);
           const endX = getX(line.endIndex);
@@ -528,8 +528,8 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
     }
 
     // --- DRAW LIQUIDITY SWEEPS ---
-    if (showLiquidity) {
-      stock.liquiditySweeps.forEach((sweep) => {
+    if (showLiquidity && stock?.liquiditySweeps) {
+      (stock.liquiditySweeps || []).forEach((sweep) => {
         if (sweep.index >= startIndex && sweep.index < endIndex) {
           const x = getX(sweep.index);
           const y = getY(sweep.price);
@@ -582,7 +582,7 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
       const volBarHeight = volBaseY - volY;
 
       // Volume Spike Highlight
-      const vMa = stock.indicators.volumeMa20[i];
+      const vMa = stock.indicators?.volumeMa20?.[i];
       const isVolumeSpike = vMa != null && c.volume > vMa * 1.3;
 
       ctx.fillStyle = isVolumeSpike
@@ -606,7 +606,7 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
     ctx.beginPath();
     let volMaStarted = false;
     for (let i = startIndex; i < endIndex; i++) {
-      const vMa = stock.indicators.volumeMa20[i];
+      const vMa = stock.indicators?.volumeMa20?.[i];
       if (vMa != null) {
         const x = getX(i);
         const y = getVolY(vMa);
