@@ -59,12 +59,14 @@ export default function App() {
 
   // Load stock data on mount
   useEffect(() => {
+    let isMounted = true;
+
     async function loadStocks() {
       try {
         const res = await fetch('/api/stocks');
         if (res.ok) {
           const data: StockData[] = await res.json();
-          if (data && data.length > 0) {
+          if (isMounted && data && data.length > 0) {
             setStocks(data);
             const brpt = data.find((s) => s.ticker === 'BRPT') || data[0];
             setSelectedStock(brpt);
@@ -77,19 +79,22 @@ export default function App() {
       }
 
       const initial = getMockStocks();
-      setStocks(initial);
-      setSelectedStock(initial[0]);
-      setLoading(false);
+      if (isMounted) {
+        setStocks(initial);
+        setSelectedStock(initial[0]);
+        setLoading(false);
+      }
 
-      // Trigger client-side live market sync for top liquid stocks if server API is absent (e.g. Vercel static)
+      // Trigger client-side live market sync for top liquid stocks
       setTimeout(async () => {
+        if (!isMounted) return;
         try {
           const { fetchYahooStockData } = await import('./services/yahooFinance');
-          const primaryTickers = ['BRPT', 'BBCA', '^JKSE', 'ADRO', 'BUMI', 'CUAN', 'BREN', 'GOTO'];
+          const primaryTickers = ['^JKSE', 'BRPT', 'BBCA', 'BBRI', 'BMRI', 'ADRO', 'BUMI', 'CUAN', 'BREN', 'GOTO'];
           for (const t of primaryTickers) {
             try {
               const live = await fetchYahooStockData(t);
-              if (live && live.candles && live.candles.length > 0) {
+              if (isMounted && live && live.candles && live.candles.length > 0) {
                 setStocks((prev) =>
                   prev.map((s) => (isMatchingTicker(s.ticker, live.ticker) ? live : s))
                 );
@@ -102,22 +107,36 @@ export default function App() {
         } catch (e) {
           // silent continue
         }
-      }, 1000);
+      }, 800);
     }
 
     loadStocks();
 
-    // Re-sync after server finishes preloading real market data
+    // Re-sync with fresh server data without overwriting already loaded real stock data
     const timer = setTimeout(async () => {
+      if (!isMounted) return;
       try {
         const res = await fetch('/api/stocks');
         if (res.ok) {
           const freshData: StockData[] = await res.json();
-          if (freshData && freshData.length > 0) {
-            setStocks(freshData);
+          if (isMounted && freshData && freshData.length > 0) {
+            setStocks((prev) => {
+              const updated = [...prev];
+              freshData.forEach((incoming) => {
+                const idx = updated.findIndex((s) => isMatchingTicker(s.ticker, incoming.ticker));
+                if (idx >= 0) {
+                  // Keep incoming fresh data
+                  updated[idx] = incoming;
+                } else {
+                  updated.push(incoming);
+                }
+              });
+              return updated;
+            });
+
             setSelectedStock((curr) => {
               if (!curr) return freshData[0];
-              const match = freshData.find((s) => s.ticker === curr.ticker);
+              const match = freshData.find((s) => isMatchingTicker(s.ticker, curr.ticker));
               return match || curr;
             });
           }
@@ -125,15 +144,18 @@ export default function App() {
       } catch (e) {
         // silent continue
       }
-    }, 3500);
+    }, 3000);
 
-    return () => clearTimeout(timer);
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
   }, []);
 
   const handleSelectStock = async (stock: StockData) => {
     setFetchingTicker(stock.ticker);
     setIsStockFetching(true);
-    const minDelay = new Promise((resolve) => setTimeout(resolve, 1800));
+    const minDelay = new Promise((resolve) => setTimeout(resolve, 1200));
     try {
       let freshRealData: StockData | null = null;
       try {
@@ -158,10 +180,10 @@ export default function App() {
 
       await minDelay;
 
-      if (freshRealData) {
+      if (freshRealData && freshRealData.candles && freshRealData.candles.length > 0) {
         setSelectedStock(freshRealData);
         setStocks((prev) =>
-          prev.map((s) => (s.ticker === freshRealData!.ticker ? freshRealData! : s))
+          prev.map((s) => (isMatchingTicker(s.ticker, freshRealData!.ticker) ? freshRealData! : s))
         );
       } else {
         setSelectedStock(stock);
@@ -180,7 +202,7 @@ export default function App() {
     }
     setFetchingTicker(cleanTicker);
     setIsStockFetching(true);
-    const minDelay = new Promise((resolve) => setTimeout(resolve, 1800));
+    const minDelay = new Promise((resolve) => setTimeout(resolve, 1200));
     try {
       let stockData: StockData | null = null;
       try {
@@ -204,10 +226,12 @@ export default function App() {
 
       await minDelay;
 
-      if (stockData) {
+      if (stockData && stockData.candles && stockData.candles.length > 0) {
         setStocks((prev) => {
-          const exists = prev.some((s) => s.ticker === stockData!.ticker);
-          return exists ? prev.map((s) => (s.ticker === stockData!.ticker ? stockData! : s)) : [stockData!, ...prev];
+          const exists = prev.some((s) => isMatchingTicker(s.ticker, stockData!.ticker));
+          return exists
+            ? prev.map((s) => (isMatchingTicker(s.ticker, stockData!.ticker) ? stockData! : s))
+            : [stockData!, ...prev];
         });
         setSelectedStock(stockData);
       }
@@ -217,6 +241,7 @@ export default function App() {
       setIsStockFetching(false);
     }
   };
+
 
   const handleStartChart = (ticker?: string) => {
     setActiveTab('chart');

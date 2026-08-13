@@ -1,4 +1,4 @@
-import { getMockStocks } from './_lib/stockEngine.js';
+import { getAllStocksServer } from './_lib/stockEngine.js';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -13,10 +13,11 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const stocks = getMockStocks();
+    const stocks = await getAllStocksServer();
     return res.status(200).json(stocks);
   } catch (error) {
     console.error('API /stocks handler error:', error);
     return res.status(200).json([]);
   }
 }
+

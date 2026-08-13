@@ -1,4 +1,4 @@
-import { getMockStocks } from './_lib/stockEngine.js';
+import { getAllStocksServer } from './_lib/stockEngine.js';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -13,22 +13,22 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const list = getMockStocks();
+    const list = await getAllStocksServer();
     const { structure, minRr, volumeOnly } = req.query || {};
 
     let filtered = list;
 
     if (structure && structure !== 'ALL') {
-      filtered = filtered.filter((s) => s.recommendation.structure === structure);
+      filtered = filtered.filter((s) => s.recommendation?.structure === structure);
     }
 
     if (minRr) {
       const minVal = parseFloat(minRr as string);
-      filtered = filtered.filter((s) => s.recommendation.riskRewardRatio >= minVal);
+      filtered = filtered.filter((s) => (s.recommendation?.riskRewardRatio || 0) >= minVal);
     }
 
     if (volumeOnly === 'true') {
-      filtered = filtered.filter((s) => s.recommendation.volumeConfirmation);
+      filtered = filtered.filter((s) => s.recommendation?.volumeConfirmation);
     }
 
     return res.status(200).json(filtered);
@@ -37,3 +37,4 @@ export default async function handler(req: any, res: any) {
     return res.status(200).json([]);
   }
 }
+
