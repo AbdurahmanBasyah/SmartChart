@@ -79,12 +79,12 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
     }
   }
 
-  const maxAllowedDateStr = getLatestClosedTradingDateStr();
+  const todayDateStr = formatJakartaDate(new Date());
 
   for (const item of candidates) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2800);
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
 
       const fetchOpts: RequestInit = item.mode === 'direct'
         ? {
@@ -129,7 +129,11 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
       const closes: (number | null)[] = quote.close || [];
       const volumes: (number | null)[] = quote.volume || [];
 
+      const isIhsg = cleanTicker === '^JKSE';
+      const roundPrice = (p: number) => isIhsg ? Math.round(p) : roundToIdxTick(p, false);
+
       const candles: Candle[] = [];
+      const seenDates = new Set<string>();
 
       for (let i = 0; i < timestamps.length; i++) {
         const o = opens[i];
@@ -140,16 +144,19 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
 
         if (o != null && h != null && l != null && c != null && c > 0) {
           const dateStr = formatJakartaDate(timestamps[i]);
-          if (dateStr > maxAllowedDateStr) continue;
+          if (dateStr > todayDateStr) continue;
 
-          candles.push({
-            time: dateStr,
-            open: roundToIdxTick(o),
-            high: roundToIdxTick(Math.max(h, o, c)),
-            low: roundToIdxTick(Math.min(l, o, c)),
-            close: roundToIdxTick(c),
-            volume: Math.round(v || 500000),
-          });
+          if (!seenDates.has(dateStr)) {
+            seenDates.add(dateStr);
+            candles.push({
+              time: dateStr,
+              open: roundPrice(o),
+              high: roundPrice(Math.max(h, o, c)),
+              low: roundPrice(Math.min(l, o, c)),
+              close: roundPrice(c),
+              volume: Math.round(v || 500000),
+            });
+          }
         }
       }
 
@@ -159,7 +166,7 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
 
       if (latestPrice && latestTime) {
         const metaDateStr = formatJakartaDate(latestTime);
-        if (metaDateStr <= maxAllowedDateStr) {
+        if (metaDateStr <= todayDateStr) {
           const lastCandle = candles[candles.length - 1];
 
           if (!lastCandle || lastCandle.time < metaDateStr) {
@@ -170,23 +177,22 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
 
             candles.push({
               time: metaDateStr,
-              open: roundToIdxTick(openPrice),
-              high: roundToIdxTick(highPrice),
-              low: roundToIdxTick(lowPrice),
-              close: roundToIdxTick(latestPrice),
+              open: roundPrice(openPrice),
+              high: roundPrice(highPrice),
+              low: roundPrice(lowPrice),
+              close: roundPrice(latestPrice),
               volume: Math.round(vol),
             });
           } else if (lastCandle.time === metaDateStr) {
-            lastCandle.close = roundToIdxTick(latestPrice);
-            if (meta.regularMarketDayHigh) lastCandle.high = roundToIdxTick(meta.regularMarketDayHigh);
-            if (meta.regularMarketDayLow) lastCandle.low = roundToIdxTick(meta.regularMarketDayLow);
+            lastCandle.close = roundPrice(latestPrice);
+            if (meta.regularMarketDayHigh) lastCandle.high = roundPrice(meta.regularMarketDayHigh);
+            if (meta.regularMarketDayLow) lastCandle.low = roundPrice(meta.regularMarketDayLow);
             if (meta.regularMarketVolume) lastCandle.volume = Math.round(meta.regularMarketVolume);
           }
         }
       }
 
       if (candles.length >= 10) {
-        const isIhsg = cleanTicker === '^JKSE';
         const companyName = isIhsg
           ? 'Indeks Harga Saham Gabungan (IHSG)'
           : (meta.longName || meta.shortName || `${cleanTicker} Indonesia Tbk.`);
@@ -195,7 +201,7 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
         const conglomerateGroup = isIhsg ? 'Bursa Efek Indonesia' : matchedConfig?.cg;
 
         const finalTicker = isIhsg ? 'IHSG' : cleanTicker;
-        return buildStockData(yahooSymbol, finalTicker, companyName, sectorName, candles, conglomerateGroup);
+        return buildStockData(yahooSymbol, finalTicker, companyName, sectorName, candles, conglomerateGroup, true);
       }
     } catch (err) {
       // Silent continue to next candidate
@@ -220,7 +226,8 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
     companyName,
     sectorName,
     fallbackCandles,
-    matchedConfig?.cg
+    matchedConfig?.cg,
+    false
   );
 }
 

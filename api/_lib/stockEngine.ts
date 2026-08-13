@@ -144,6 +144,7 @@ export interface StockData {
   currentPrice: number;
   change24h: number;
   changePercent24h: number;
+  isRealData?: boolean;
 }
 
 export interface StockRawConfig {
@@ -1000,12 +1001,10 @@ export function getLatestClosedTradingDateStr(now: Date = new Date()): string {
     if (p.type === 'minute') minute = parseInt(p.value, 10);
   }
 
-  const isAfterClose = (hour * 60 + minute) >= (16 * 60);
   let daysToSubtract = 0;
   if (weekday === 'Sun') daysToSubtract = 2;
   else if (weekday === 'Sat') daysToSubtract = 1;
-  else if (weekday === 'Mon') daysToSubtract = isAfterClose ? 0 : 3;
-  else daysToSubtract = isAfterClose ? 0 : 1;
+  else daysToSubtract = 0;
 
   const targetDate = new Date(Date.UTC(year, month - 1, day));
   targetDate.setUTCDate(targetDate.getUTCDate() - daysToSubtract);
@@ -1090,7 +1089,8 @@ export function buildStockData(
   name: string,
   sector: string,
   candles: Candle[],
-  conglomerate?: string
+  conglomerate?: string,
+  isRealData?: boolean
 ): StockData {
   const currentPrice = candles[candles.length - 1]?.close || 100;
   const previousClose = candles.length > 1 ? candles[candles.length - 2]?.close || currentPrice : currentPrice;
@@ -1153,6 +1153,7 @@ export function buildStockData(
     currentPrice,
     change24h,
     changePercent24h,
+    isRealData,
   };
 }
 
@@ -1337,7 +1338,7 @@ export async function fetchYahooStockDataServer(ticker: string): Promise<StockDa
       throw new Error('Malformed quote data in Yahoo response');
     }
 
-    const maxAllowedDateStr = getLatestClosedTradingDateStr();
+    const todayDateStr = formatJakartaDate(new Date());
     const candles: Candle[] = [];
     const seenDates = new Set<string>();
 
@@ -1354,7 +1355,7 @@ export async function fetchYahooStockDataServer(ticker: string): Promise<StockDa
       }
 
       const dateStr = formatJakartaDate(ts);
-      if (dateStr > maxAllowedDateStr) continue;
+      if (dateStr > todayDateStr) continue;
 
       if (!seenDates.has(dateStr)) {
         seenDates.add(dateStr);
@@ -1375,7 +1376,7 @@ export async function fetchYahooStockDataServer(ticker: string): Promise<StockDa
       throw new Error(`Insufficient candle count (${candles.length}) for ${cleanTicker}`);
     }
 
-    const stockData = buildStockData(yahooSymbol, displayTicker, stockName, sector, candles, conglomerate);
+    const stockData = buildStockData(yahooSymbol, displayTicker, stockName, sector, candles, conglomerate, true);
     serverCache.set(cleanTicker, { data: stockData, timestamp: Date.now() });
     serverCache.set(displayTicker, { data: stockData, timestamp: Date.now() });
     return stockData;
@@ -1384,7 +1385,7 @@ export async function fetchYahooStockDataServer(ticker: string): Promise<StockDa
     // Return mock fallback on error
     const baseP = stockMeta ? stockMeta.p : 1000;
     const fallbackCandles = generateCandles(baseP, 0.025, 0.001, 90);
-    return buildStockData(yahooSymbol, displayTicker, stockName, sector, fallbackCandles, conglomerate);
+    return buildStockData(yahooSymbol, displayTicker, stockName, sector, fallbackCandles, conglomerate, false);
   }
 }
 

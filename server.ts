@@ -29,12 +29,35 @@ async function startServer() {
 
   // Pre-fetch real Yahoo Finance market data in background for liquid IDX tickers
   async function preloadRealMarketData() {
-    const tickers = liquidIDXStocks.map((s) => s.t);
+    const priorityTickers = ['^JKSE', 'BRPT', 'BBCA', 'BBRI', 'BMRI', 'ADRO', 'BUMI', 'CUAN', 'BREN', 'GOTO', 'TLKM', 'ASII', 'ANTM', 'AMMN', 'TPIA', 'INDF'];
+    const allTickers = liquidIDXStocks.map((s) => s.t);
+    const remainingTickers = allTickers.filter((t) => !priorityTickers.includes(t) && t !== 'IHSG');
 
-    console.log(`Pre-loading real market data from Yahoo Finance for ${tickers.length} liquid IDX stocks...`);
-    const batchSize = 5;
-    for (let i = 0; i < tickers.length; i += batchSize) {
-      const batch = tickers.slice(i, i + batchSize);
+    console.log(`Pre-loading real market data from Yahoo Finance for primary stocks...`);
+    // 1. Fetch primary tickers immediately in parallel
+    await Promise.allSettled(
+      priorityTickers.map(async (t) => {
+        try {
+          const realData = await fetchYahooStockData(t);
+          if (realData && realData.candles && realData.candles.length > 0) {
+            stockCache.set(realData.ticker.toUpperCase(), realData);
+            stockCache.set(realData.symbol.toUpperCase(), realData);
+            if (realData.ticker === '^JKSE' || realData.ticker === 'IHSG') {
+              stockCache.set('IHSG', realData);
+              stockCache.set('JKSE', realData);
+              stockCache.set('^JKSE', realData);
+            }
+          }
+        } catch (err) {
+          console.warn(`Failed preloading priority data for ${t}:`, err);
+        }
+      })
+    );
+
+    // 2. Fetch remaining tickers in concurrent batches
+    const batchSize = 6;
+    for (let i = 0; i < remainingTickers.length; i += batchSize) {
+      const batch = remainingTickers.slice(i, i + batchSize);
       await Promise.allSettled(
         batch.map(async (t) => {
           try {
@@ -44,7 +67,7 @@ async function startServer() {
               stockCache.set(realData.symbol.toUpperCase(), realData);
             }
           } catch (err) {
-            console.warn(`Failed preloading real data for ${t}:`, err);
+            console.warn(`Failed preloading data for ${t}:`, err);
           }
         })
       );

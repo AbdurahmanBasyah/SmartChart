@@ -47,18 +47,14 @@ export function getLatestClosedTradingDateStr(now: Date = new Date()): string {
     if (p.type === 'minute') minute = parseInt(p.value, 10);
   }
 
-  const isAfterClose = (hour * 60 + minute) >= (16 * 60);
-
   let daysToSubtract = 0;
   if (weekday === 'Sun') {
     daysToSubtract = 2; // Friday
   } else if (weekday === 'Sat') {
     daysToSubtract = 1; // Friday
-  } else if (weekday === 'Mon') {
-    daysToSubtract = isAfterClose ? 0 : 3; // Friday if before 16:00, Monday if after 16:00
   } else {
-    // Tue, Wed, Thu, Fri
-    daysToSubtract = isAfterClose ? 0 : 1; // Yesterday if before 16:00, Today if after 16:00
+    // Weekdays (Mon-Fri) -> today is the active trading day!
+    daysToSubtract = 0;
   }
 
   const targetDate = new Date(Date.UTC(year, month - 1, day));
@@ -144,7 +140,8 @@ export function buildStockData(
   name: string,
   sector: string,
   candles: Candle[],
-  conglomerate?: string
+  conglomerate?: string,
+  isRealData?: boolean
 ): StockData {
   const currentPrice = candles[candles.length - 1]?.close || 100;
   const previousClose = candles.length > 1 ? candles[candles.length - 2]?.close || currentPrice : currentPrice;
@@ -207,6 +204,7 @@ export function buildStockData(
     currentPrice,
     change24h,
     changePercent24h,
+    isRealData,
   };
 }
 

@@ -62,58 +62,68 @@ export default function App() {
     let isMounted = true;
 
     async function loadStocks() {
+      let initialList: StockData[] = [];
       try {
         const res = await fetch('/api/stocks');
         if (res.ok) {
           const data: StockData[] = await res.json();
-          if (isMounted && data && data.length > 0) {
-            setStocks(data);
-            const brpt = data.find((s) => s.ticker === 'BRPT') || data[0];
-            setSelectedStock(brpt);
-            setLoading(false);
-            return;
+          if (data && data.length > 0) {
+            initialList = data;
           }
         }
       } catch (e) {
-        // Fallback to local stock data silently on static hosts
+        // Fallback to local stock data
       }
 
-      const initial = getMockStocks();
+      if (initialList.length === 0) {
+        initialList = getMockStocks();
+      }
+
       if (isMounted) {
-        setStocks(initial);
-        setSelectedStock(initial[0]);
+        setStocks(initialList);
+        const brpt = initialList.find((s) => s.ticker === 'BRPT') || initialList[0];
+        setSelectedStock(brpt);
         setLoading(false);
       }
 
-      // Trigger client-side live market sync for top liquid stocks
-      setTimeout(async () => {
+      // Immediately fetch real live market data for top liquid stocks and active selection
+      const syncRealData = async () => {
         if (!isMounted) return;
         try {
           const { fetchYahooStockData } = await import('./services/yahooFinance');
           const primaryTickers = ['^JKSE', 'BRPT', 'BBCA', 'BBRI', 'BMRI', 'ADRO', 'BUMI', 'CUAN', 'BREN', 'GOTO'];
-          for (const t of primaryTickers) {
-            try {
-              const live = await fetchYahooStockData(t);
-              if (isMounted && live && live.candles && live.candles.length > 0) {
-                setStocks((prev) =>
-                  prev.map((s) => (isMatchingTicker(s.ticker, live.ticker) ? live : s))
-                );
-                setSelectedStock((curr) => (isMatchingTicker(curr?.ticker, live.ticker) ? live : curr));
+          
+          await Promise.allSettled(
+            primaryTickers.map(async (t) => {
+              try {
+                const live = await fetchYahooStockData(t);
+                if (isMounted && live && live.candles && live.candles.length > 0) {
+                  setStocks((prev) =>
+                    prev.map((s) => (isMatchingTicker(s.ticker, live.ticker) ? live : s))
+                  );
+                  setSelectedStock((curr) => (isMatchingTicker(curr?.ticker, live.ticker) ? live : curr));
+                }
+              } catch (err) {
+                // silent continue
               }
-            } catch (err) {
-              // silent continue
-            }
-          }
+            })
+          );
         } catch (e) {
           // silent continue
         }
-      }, 800);
+      };
+
+      // Run live real sync immediately and re-check after brief interval
+      syncRealData();
+      const syncTimer = setTimeout(syncRealData, 2500);
+
+      return () => clearTimeout(syncTimer);
     }
 
-    loadStocks();
+    const cleanupPromise = loadStocks();
 
-    // Re-sync with fresh server data without overwriting already loaded real stock data
-    const timer = setTimeout(async () => {
+    // Re-sync with server periodically without overwriting real stock data
+    const interval = setInterval(async () => {
       if (!isMounted) return;
       try {
         const res = await fetch('/api/stocks');
@@ -125,7 +135,11 @@ export default function App() {
               freshData.forEach((incoming) => {
                 const idx = updated.findIndex((s) => isMatchingTicker(s.ticker, incoming.ticker));
                 if (idx >= 0) {
-                  // Keep incoming fresh data
+                  const existing = updated[idx];
+                  // Never overwrite real data with mock fallback data
+                  if (existing.isRealData && !incoming.isRealData) {
+                    return;
+                  }
                   updated[idx] = incoming;
                 } else {
                   updated.push(incoming);
@@ -137,18 +151,24 @@ export default function App() {
             setSelectedStock((curr) => {
               if (!curr) return freshData[0];
               const match = freshData.find((s) => isMatchingTicker(s.ticker, curr.ticker));
-              return match || curr;
+              if (match) {
+                if (curr.isRealData && !match.isRealData) {
+                  return curr; // Keep real data
+                }
+                return match;
+              }
+              return curr;
             });
           }
         }
       } catch (e) {
         // silent continue
       }
-    }, 3000);
+    }, 5000);
 
     return () => {
       isMounted = false;
-      clearTimeout(timer);
+      clearInterval(interval);
     };
   }, []);
 

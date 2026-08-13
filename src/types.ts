@@ -142,6 +142,7 @@ export interface StockData {
   currentPrice: number;
   change24h: number;
   changePercent24h: number;
+  isRealData?: boolean;
 }
 
 export interface ScreenerFilter {
