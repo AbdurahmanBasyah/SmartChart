@@ -66,6 +66,25 @@ export function getSmcSignalPriorityScore(stock: StockData): number {
   return 8;
 }
 
+export const CONGLOMERATE_SECTOR_GROUPS: { id: string; label: string; tickers?: string[] }[] = [
+  { id: 'ALL', label: '🏛️ Semua Grup & Sektor' },
+  { id: 'WATCHLIST', label: '⭐ Watchlist Saya' },
+  { id: 'IHSG', label: '📈 1. IHSG', tickers: ['IHSG', '^JKSE', 'JKSE'] },
+  { id: 'PRAJOGO', label: '👑 2. Prajogo Pangestu', tickers: ['CDIA', 'CUAN', 'BREN', 'PTRO', 'TPIA', 'SINI', 'BRPT'] },
+  { id: 'BAKRIE', label: '👑 3. Bakrie', tickers: ['ALII', 'BNBR', 'KOTA', 'MDIA', 'BRMS', 'BUMI', 'DEWA', 'ENRG', 'VKTR', 'JGLE', 'OASA', 'BIPI', 'UNSP', 'VIVA'] },
+  { id: 'BOY_THOHIR', label: '👑 4. Boy Thohir', tickers: ['MBMA', 'ESSA', 'MDKA', 'AADI', 'ADMR', 'ADRO', 'EMAS'] },
+  { id: 'AGUAN', label: '👑 5. Aguan', tickers: ['CBDK', 'ECII', 'ERAA', 'ERAL', 'INPC', 'JIHD', 'PANI'] },
+  { id: 'HAPPY_HAPSORO', label: '👑 6. Happy Hapsoro', tickers: ['ARCI', 'BUVA', 'CBRE', 'MINA', 'PADDI', 'PADI', 'PSKT', 'RAJA', 'RATU', 'SINI', 'UANG', 'PSAB', 'FORU'] },
+  { id: 'PERBANKAN', label: '🏦 7. Perbankan', tickers: ['AGRO', 'ARTO', 'BBYB', 'BGTG', 'BMRI', 'BBCA', 'BBNI', 'BBTN', 'BBRI', 'BRIS', 'BBHI', 'NOBU', 'PNBN', 'PNLF'] },
+  { id: 'BUMN', label: '🏢 8. BUMN', tickers: ['ANTM', 'GIAA', 'GMFFI', 'GMFI', 'INCO', 'JSMR', 'KAEF', 'KRAS', 'SMBR', 'SMGR', 'TINS', 'TLKM'] },
+  { id: 'COAL', label: '⚡ 9. COAL', tickers: ['BUMI', 'HRUM', 'ITMG', 'PTBA', 'BYAN'] },
+  { id: 'HAJI_ISSAM', label: '👑 10. HAJI ISSAM', tickers: ['FAST', 'JARR', 'PGUN', 'TEBE'] },
+  { id: 'HASYIM', label: '👑 11. HASYIM', tickers: ['DOOH', 'INET', 'KETR', 'WIFI'] },
+  { id: 'SALIM', label: '👑 12. Salim', tickers: ['ICBP', 'LSIP', 'SIMP', 'META', 'INDF', 'AMRT', 'ROTI', 'DNET', 'IMAS', 'IMJS', 'AMMN', 'MEDC'] },
+  { id: 'INTERNET', label: '🌐 13. Internet', tickers: ['MORA', 'DOOH', 'IRSX', 'INET', 'PADA', 'WIFI'] },
+  { id: 'LOGISTIK', label: '🚢 14. Logistik dan perkapalan', tickers: ['SOCI', 'BULL', 'GTSI', 'HUMI', 'LEAD'] },
+];
+
 export const StockScreener: React.FC<StockScreenerProps> = ({
   stocks,
   onSelectStock,
@@ -169,10 +188,33 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
       return false;
     }
 
-    // Conglomerate group filter
+    // Conglomerate / Sector group filter
     if (filters.conglomerateFilter && filters.conglomerateFilter !== 'ALL') {
-      if (stock.conglomerate !== filters.conglomerateFilter) {
-        return false;
+      if (filters.conglomerateFilter === 'WATCHLIST') {
+        const isWl = watchlist.some((w) => {
+          const cleanW = w.trim().toUpperCase().replace('.JK', '');
+          const stockTick = stock.ticker.replace('.JK', '').toUpperCase();
+          return stockTick === cleanW || (cleanW === 'IHSG' && stockTick === '^JKSE');
+        });
+        if (!isWl) return false;
+      } else {
+        const selectedGroup = CONGLOMERATE_SECTOR_GROUPS.find((g) => g.id === filters.conglomerateFilter);
+        if (selectedGroup?.tickers && selectedGroup.tickers.length > 0) {
+          const isMatch = selectedGroup.tickers.some((t) => {
+            const cleanT = t.trim().toUpperCase().replace('.JK', '');
+            const stockTick = stock.ticker.replace('.JK', '').toUpperCase();
+            return (
+              stockTick === cleanT ||
+              (cleanT === '^JKSE' && (stockTick === 'IHSG' || stockTick === '^JKSE')) ||
+              (cleanT === 'IHSG' && (stockTick === '^JKSE' || stockTick === 'IHSG')) ||
+              (cleanT === 'PADDI' && stockTick === 'PADI') ||
+              (cleanT === 'GMFFI' && stockTick === 'GMFI')
+            );
+          });
+          if (!isMatch) return false;
+        } else if (stock.conglomerate !== filters.conglomerateFilter) {
+          return false;
+        }
       }
     }
 
@@ -321,17 +363,16 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
             )}
           </div>
 
-          {/* Conglomerate Group Selector */}
+          {/* Conglomerate / Sektor Group Selector */}
           <div>
             <select
               value={filters.conglomerateFilter || 'ALL'}
               onChange={(e) => setFilters({ ...filters, conglomerateFilter: e.target.value })}
-              className="w-full bg-slate-950 border border-amber-500/30 text-amber-300 font-medium rounded-xl px-3 py-2 focus:outline-none focus:border-amber-400"
+              className="w-full bg-slate-950 border border-amber-500/30 text-amber-300 font-medium rounded-xl px-3 py-2 focus:outline-none focus:border-amber-400 cursor-pointer"
             >
-              <option value="ALL">🏛️ All Conglomerate Groups</option>
-              {availableConglomerates.map((cg) => (
-                <option key={cg} value={cg}>
-                  👑 {cg}
+              {CONGLOMERATE_SECTOR_GROUPS.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.label}
                 </option>
               ))}
             </select>
