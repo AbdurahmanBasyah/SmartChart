@@ -19,6 +19,10 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
   let cleanTicker = ticker.trim().toUpperCase().replace('.JK', '');
   if (cleanTicker === 'IHSG' || cleanTicker === 'JKSE' || cleanTicker === '^JKSE') {
     cleanTicker = '^JKSE';
+  } else if (cleanTicker === 'GMFFI') {
+    cleanTicker = 'GMFI';
+  } else if (cleanTicker === 'PADDI') {
+    cleanTicker = 'PADI';
   }
 
   const yahooSymbol = cleanTicker.startsWith('^') ? cleanTicker : `${cleanTicker}.JK`;

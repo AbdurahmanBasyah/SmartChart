@@ -29,11 +29,15 @@ async function startServer() {
 
   // Pre-fetch real Yahoo Finance market data in background for liquid IDX tickers
   async function preloadRealMarketData() {
-    const priorityTickers = ['^JKSE', 'BRPT', 'BBCA', 'BBRI', 'BMRI', 'ADRO', 'BUMI', 'CUAN', 'BREN', 'GOTO', 'TLKM', 'ASII', 'ANTM', 'AMMN', 'TPIA', 'INDF'];
-    const allTickers = liquidIDXStocks.map((s) => s.t);
-    const remainingTickers = allTickers.filter((t) => !priorityTickers.includes(t) && t !== 'IHSG');
+    const priorityTickers = [
+      '^JKSE', 'BRPT', 'BBCA', 'BBRI', 'BMRI', 'ADRO', 'BUMI', 'CUAN', 'BREN', 'GOTO',
+      'TLKM', 'ASII', 'ANTM', 'AMMN', 'TPIA', 'INDF', 'PANI', 'PTRO', 'MDKA', 'ICBP',
+      'UNVR', 'KLBF', 'CPIN', 'MEDC', 'PGAS', 'HRUM', 'ITMG', 'PTBA', 'WIFI', 'INET'
+    ];
+    const allTickers = liquidIDXStocks.map((s) => s.t === 'IHSG' ? '^JKSE' : s.t);
+    const remainingTickers = Array.from(new Set(allTickers.filter((t) => !priorityTickers.includes(t) && t !== 'IHSG')));
 
-    console.log(`Pre-loading real market data from Yahoo Finance for primary stocks...`);
+    console.log(`Pre-loading real market data from Yahoo Finance for ${allTickers.length} stocks...`);
     // 1. Fetch primary tickers immediately in parallel
     await Promise.allSettled(
       priorityTickers.map(async (t) => {
@@ -55,7 +59,7 @@ async function startServer() {
     );
 
     // 2. Fetch remaining tickers in concurrent batches
-    const batchSize = 6;
+    const batchSize = 8;
     for (let i = 0; i < remainingTickers.length; i += batchSize) {
       const batch = remainingTickers.slice(i, i + batchSize);
       await Promise.allSettled(

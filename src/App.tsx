@@ -10,7 +10,7 @@ import { Watchlist } from './components/Watchlist';
 import { SmcGuideModal } from './components/SmcGuideModal';
 import { SmcLoadingModal } from './components/SmcLoadingModal';
 import { SyncLoadingScreen } from './components/SyncLoadingScreen';
-import { getMockStocks } from './data/mockStocks';
+import { getMockStocks, liquidIDXStocks } from './data/mockStocks';
 import { StockData } from './types';
 
 function isMatchingTicker(tickerA?: string, tickerB?: string): boolean {
@@ -35,10 +35,11 @@ export default function App() {
 
   // Initial Sync HUD States
   const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(true);
-  const [syncProgress, setSyncProgress] = useState<number>(10);
+  const [syncProgress, setSyncProgress] = useState<number>(5);
   const [syncedTickers, setSyncedTickers] = useState<string[]>([]);
   const [currentProcessingTicker, setCurrentProcessingTicker] = useState<string>('BRPT');
   const [isSyncComplete, setIsSyncComplete] = useState<boolean>(false);
+  const [totalTargetCount, setTotalTargetCount] = useState<number>(85);
 
   // Watchlist State persisted in localStorage
   const [watchlist, setWatchlist] = useState<string[]>(() => {
@@ -114,41 +115,73 @@ export default function App() {
         setLoading(false);
       }
 
-      // Immediately fetch real live market data for top liquid stocks and all watchlist items
+      // Immediately fetch real live market data for all requested conglomerates, sectors, and watchlist items
       const syncRealData = async () => {
         if (!isMounted) return;
         try {
           const { fetchYahooStockData } = await import('./services/yahooFinance');
-          const primaryTickers = Array.from(
+          const allTargetTickers = Array.from(
             new Set([
-              'BRPT', 'BBCA', 'BBRI', 'BMRI', 'ADRO', 'BUMI', 'CUAN', 'BREN', 'GOTO',
-              'TLKM', 'ASII', 'ANTM', 'AMMN', 'TPIA', 'INDF', 'PANI', 'PTRO', 'MDKA',
-              'ICBP', 'UNVR', 'KLBF', 'CPIN', 'MEDC', 'AKRA', 'PGAS', '^JKSE',
-              ...watchlist,
+              // 1. IHSG
+              '^JKSE',
+              // 2. Prajogo Pangestu: CDIA CUAN BREN PTRO TPIA SINI BRPT
+              'CDIA', 'CUAN', 'BREN', 'PTRO', 'TPIA', 'SINI', 'BRPT',
+              // 3. Bakrie: ALII BNBR KOTA MDIA BRMS BUMI DEWA ENRG VKTR JGLE OASA BIPI UNSP VIVA
+              'ALII', 'BNBR', 'KOTA', 'MDIA', 'BRMS', 'BUMI', 'DEWA', 'ENRG', 'VKTR', 'JGLE', 'OASA', 'BIPI', 'UNSP', 'VIVA',
+              // 4. Boy Thohir: MBMA ESSA MDKA AADI ADMR ADRO EMAS
+              'MBMA', 'ESSA', 'MDKA', 'AADI', 'ADMR', 'ADRO', 'EMAS',
+              // 5. Aguan: CBDK ECII ERAA ERAL INPC JIHD PANI
+              'CBDK', 'ECII', 'ERAA', 'ERAL', 'INPC', 'JIHD', 'PANI',
+              // 6. Happy Hapsoro: ARCI BUVA CBRE MINA PADI PSKT RAJA RATU UANG PSAB FORU
+              'ARCI', 'BUVA', 'CBRE', 'MINA', 'PADI', 'PSKT', 'RAJA', 'RATU', 'UANG', 'PSAB', 'FORU',
+              // 7. Perbankan: AGRO ARTO BBYB BGTG BMRI BBCA BBNI BBTN BBRI BRIS BBHI NOBU PNBN PNLF
+              'AGRO', 'ARTO', 'BBYB', 'BGTG', 'BMRI', 'BBCA', 'BBNI', 'BBTN', 'BBRI', 'BRIS', 'BBHI', 'NOBU', 'PNBN', 'PNLF',
+              // 8. BUMN: ANTM GIAA GMFI INCO JSMR KAEF KRAS SMBR SMGR TINS TLKM
+              'ANTM', 'GIAA', 'GMFI', 'INCO', 'JSMR', 'KAEF', 'KRAS', 'SMBR', 'SMGR', 'TINS', 'TLKM',
+              // 9. COAL: BUMI HRUM ITMG PTBA BYAN
+              'HRUM', 'ITMG', 'PTBA', 'BYAN',
+              // 10. HAJI ISSAM: FAST JARR PGUN TEBE
+              'FAST', 'JARR', 'PGUN', 'TEBE',
+              // 11. HASYIM: DOOH INET KETR WIFI
+              'DOOH', 'INET', 'KETR', 'WIFI',
+              // 12. Salim: ICBP LSIP SIMP META INDF AMRT ROTI DNET IMAS IMJS AMMN MEDC
+              'ICBP', 'LSIP', 'SIMP', 'META', 'INDF', 'AMRT', 'ROTI', 'DNET', 'IMAS', 'IMJS', 'AMMN', 'MEDC',
+              // 13. Internet: MORA IRSX PADA
+              'MORA', 'IRSX', 'PADA',
+              // 14. Logistik dan perkapalan: SOCI BULL GTSI HUMI LEAD
+              'SOCI', 'BULL', 'GTSI', 'HUMI', 'LEAD',
+              // Additional liquid stocks from database
+              ...liquidIDXStocks.map((s) => (s.t === 'IHSG' ? '^JKSE' : s.t)),
+              // Watchlist items (normalizing any variations)
+              ...watchlist.map((w) =>
+                w === 'GMFFI' ? 'GMFI' : w === 'PADDI' ? 'PADI' : w === 'IHSG' ? '^JKSE' : w.trim().toUpperCase()
+              ),
             ])
           );
 
-          let completedCount = 0;
-          const batchSize = 4;
+          setTotalTargetCount(allTargetTickers.length);
 
-          for (let i = 0; i < primaryTickers.length; i += batchSize) {
+          let completedCount = 0;
+          const batchSize = 6;
+
+          for (let i = 0; i < allTargetTickers.length; i += batchSize) {
             if (!isMounted) break;
-            const chunk = primaryTickers.slice(i, i + batchSize);
-            
+            const chunk = allTargetTickers.slice(i, i + batchSize);
+
             await Promise.allSettled(
               chunk.map(async (t) => {
                 try {
                   if (isMounted) setCurrentProcessingTicker(t);
                   const live = await fetchYahooStockData(t);
                   completedCount++;
-                  
+
                   if (isMounted && live && live.candles && live.candles.length > 0) {
                     setStocks((prev) => {
                       const exists = prev.some((s) => isMatchingTicker(s.ticker, live.ticker));
                       const updated = exists
                         ? prev.map((s) => (isMatchingTicker(s.ticker, live.ticker) ? live : s))
                         : [live, ...prev];
-                      
+
                       try {
                         const toCache = updated.filter((s) => s.isRealData);
                         localStorage.setItem('smc_custom_stocks', JSON.stringify(toCache));
@@ -156,13 +189,13 @@ export default function App() {
 
                       return updated;
                     });
-                    
+
                     setSyncedTickers((prev) => Array.from(new Set([...prev, live.ticker])));
                     setSelectedStock((curr) => (isMatchingTicker(curr?.ticker, live.ticker) ? live : curr));
                   }
-                  
+
                   if (isMounted) {
-                    const rawProg = (completedCount / primaryTickers.length) * 100;
+                    const rawProg = (completedCount / allTargetTickers.length) * 100;
                     setSyncProgress(Math.min(98, Math.round(rawProg)));
                   }
                 } catch (err) {
@@ -514,7 +547,7 @@ export default function App() {
       {isSyncModalOpen && (
         <SyncLoadingScreen
           progress={syncProgress}
-          totalStocks={26}
+          totalStocks={totalTargetCount}
           syncedCount={syncedTickers.length}
           currentTicker={currentProcessingTicker}
           syncedTickers={syncedTickers}

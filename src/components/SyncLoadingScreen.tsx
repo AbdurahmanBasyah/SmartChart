@@ -153,8 +153,8 @@ export const SyncLoadingScreen: React.FC<SyncLoadingScreenProps> = ({
         {/* Feature Highlights while loading */}
         <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-slate-300">
           <div className="bg-slate-950/50 p-2 rounded-xl border border-slate-800/60 flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>Tanpa Data Dummy / Mock</span>
+            <TrendingUp className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>IDX Live Candlestick Feed</span>
           </div>
           <div className="bg-slate-950/50 p-2 rounded-xl border border-slate-800/60 flex items-center gap-2">
             <Layers className="w-4 h-4 text-cyan-400 shrink-0" />
