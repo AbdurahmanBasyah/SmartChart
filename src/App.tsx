@@ -9,6 +9,7 @@ import { PositionCalculator } from './components/PositionCalculator';
 import { Watchlist } from './components/Watchlist';
 import { SmcGuideModal } from './components/SmcGuideModal';
 import { SmcLoadingModal } from './components/SmcLoadingModal';
+import { SyncLoadingScreen } from './components/SyncLoadingScreen';
 import { getMockStocks } from './data/mockStocks';
 import { StockData } from './types';
 
@@ -31,6 +32,13 @@ export default function App() {
   const [loading, setLoading] = useState<boolean>(true);
   const [isStockFetching, setIsStockFetching] = useState<boolean>(false);
   const [fetchingTicker, setFetchingTicker] = useState<string>('');
+
+  // Initial Sync HUD States
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(true);
+  const [syncProgress, setSyncProgress] = useState<number>(10);
+  const [syncedTickers, setSyncedTickers] = useState<string[]>([]);
+  const [currentProcessingTicker, setCurrentProcessingTicker] = useState<string>('BRPT');
+  const [isSyncComplete, setIsSyncComplete] = useState<boolean>(false);
 
   // Watchlist State persisted in localStorage
   const [watchlist, setWatchlist] = useState<string[]>(() => {
@@ -112,45 +120,78 @@ export default function App() {
         try {
           const { fetchYahooStockData } = await import('./services/yahooFinance');
           const primaryTickers = Array.from(
-            new Set(['^JKSE', 'BRPT', 'BBCA', 'BBRI', 'BMRI', 'ADRO', 'BUMI', 'CUAN', 'BREN', 'GOTO', ...watchlist])
+            new Set([
+              'BRPT', 'BBCA', 'BBRI', 'BMRI', 'ADRO', 'BUMI', 'CUAN', 'BREN', 'GOTO',
+              'TLKM', 'ASII', 'ANTM', 'AMMN', 'TPIA', 'INDF', 'PANI', 'PTRO', 'MDKA',
+              'ICBP', 'UNVR', 'KLBF', 'CPIN', 'MEDC', 'AKRA', 'PGAS', '^JKSE',
+              ...watchlist,
+            ])
           );
-          
-          await Promise.allSettled(
-            primaryTickers.map(async (t) => {
-              try {
-                const live = await fetchYahooStockData(t);
-                if (isMounted && live && live.candles && live.candles.length > 0) {
-                  setStocks((prev) => {
-                    const exists = prev.some((s) => isMatchingTicker(s.ticker, live.ticker));
-                    const updated = exists
-                      ? prev.map((s) => (isMatchingTicker(s.ticker, live.ticker) ? live : s))
-                      : [live, ...prev];
-                    
-                    // Persist real data to local storage
-                    try {
-                      const toCache = updated.filter((s) => s.isRealData);
-                      localStorage.setItem('smc_custom_stocks', JSON.stringify(toCache));
-                    } catch (e) {}
 
-                    return updated;
-                  });
-                  setSelectedStock((curr) => (isMatchingTicker(curr?.ticker, live.ticker) ? live : curr));
+          let completedCount = 0;
+          const batchSize = 4;
+
+          for (let i = 0; i < primaryTickers.length; i += batchSize) {
+            if (!isMounted) break;
+            const chunk = primaryTickers.slice(i, i + batchSize);
+            
+            await Promise.allSettled(
+              chunk.map(async (t) => {
+                try {
+                  if (isMounted) setCurrentProcessingTicker(t);
+                  const live = await fetchYahooStockData(t);
+                  completedCount++;
+                  
+                  if (isMounted && live && live.candles && live.candles.length > 0) {
+                    setStocks((prev) => {
+                      const exists = prev.some((s) => isMatchingTicker(s.ticker, live.ticker));
+                      const updated = exists
+                        ? prev.map((s) => (isMatchingTicker(s.ticker, live.ticker) ? live : s))
+                        : [live, ...prev];
+                      
+                      try {
+                        const toCache = updated.filter((s) => s.isRealData);
+                        localStorage.setItem('smc_custom_stocks', JSON.stringify(toCache));
+                      } catch (e) {}
+
+                      return updated;
+                    });
+                    
+                    setSyncedTickers((prev) => Array.from(new Set([...prev, live.ticker])));
+                    setSelectedStock((curr) => (isMatchingTicker(curr?.ticker, live.ticker) ? live : curr));
+                  }
+                  
+                  if (isMounted) {
+                    const rawProg = (completedCount / primaryTickers.length) * 100;
+                    setSyncProgress(Math.min(98, Math.round(rawProg)));
+                  }
+                } catch (err) {
+                  completedCount++;
                 }
-              } catch (err) {
-                // silent continue
+              })
+            );
+          }
+
+          if (isMounted) {
+            setSyncProgress(100);
+            setIsSyncComplete(true);
+            // Smoothly auto-close after 600ms
+            setTimeout(() => {
+              if (isMounted) {
+                setIsSyncModalOpen(false);
               }
-            })
-          );
+            }, 600);
+          }
         } catch (e) {
-          // silent continue
+          if (isMounted) {
+            setIsSyncComplete(true);
+            setIsSyncModalOpen(false);
+          }
         }
       };
 
-      // Run live real sync immediately and re-check after brief interval
+      // Run live real sync immediately
       syncRealData();
-      const syncTimer = setTimeout(syncRealData, 2500);
-
-      return () => clearTimeout(syncTimer);
     }
 
     const cleanupPromise = loadStocks();
@@ -468,6 +509,19 @@ export default function App() {
 
       {/* Educational Guide Drawer/Modal */}
       <SmcGuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
+
+      {/* Real-time Initial Live Market Data Syncing Overlay */}
+      {isSyncModalOpen && (
+        <SyncLoadingScreen
+          progress={syncProgress}
+          totalStocks={26}
+          syncedCount={syncedTickers.length}
+          currentTicker={currentProcessingTicker}
+          syncedTickers={syncedTickers}
+          isComplete={isSyncComplete}
+          onContinue={() => setIsSyncModalOpen(false)}
+        />
+      )}
 
       {/* Interactive 4-Step SMC Loading Progress Modal */}
       <SmcLoadingModal

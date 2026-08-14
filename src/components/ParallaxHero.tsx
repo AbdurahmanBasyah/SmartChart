@@ -488,7 +488,10 @@ export const ParallaxHero: React.FC<ParallaxHeroProps> = ({
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {stocks.slice(0, 4).map((s) => (
+          {stocks
+            .filter((s) => s.ticker !== 'IHSG' && s.ticker !== '^JKSE' && s.ticker !== 'JKSE')
+            .slice(0, 4)
+            .map((s) => (
             <div
               key={s.symbol}
               onClick={() => onStartChart(s.ticker)}
