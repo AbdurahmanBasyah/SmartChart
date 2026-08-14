@@ -19,6 +19,7 @@ import {
   Star,
 } from 'lucide-react';
 import { StockData, Candle } from '../types';
+import { TakeProfitModal } from './TakeProfitModal';
 
 interface SmcCanvasChartProps {
   stock: StockData;
@@ -35,6 +36,7 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
   isWatchlisted = false,
   onToggleWatchlist,
 }) => {
+  const [isTpModalOpen, setIsTpModalOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -887,6 +889,7 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
     priceOffset,
     showOrderBlocks,
     showFvg,
+    showGaps,
     showBosChoch,
     showLiquidity,
     showSupportResistance,
@@ -1232,22 +1235,22 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col h-[620px]">
       {/* Top Controls Bar */}
-      <div className="bg-slate-950 border-b border-slate-800 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+      <div className="bg-slate-950 border-b border-slate-800 px-3 sm:px-4 py-2.5 sm:py-3 flex flex-wrap items-center justify-between gap-2.5 text-xs">
         {/* Stock Title Info */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-baseline gap-2">
-            <span className="font-black text-lg text-white">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
+          <div className="flex items-baseline gap-1.5 sm:gap-2 min-w-0">
+            <span className="font-black text-base sm:text-lg text-white shrink-0">
               {stock.ticker === '^JKSE' || stock.ticker === 'JKSE' ? 'IHSG' : stock.ticker}
             </span>
-            <span className="text-slate-400 font-medium truncate max-w-[150px] sm:max-w-xs">
+            <span className="text-slate-400 font-medium truncate max-w-[100px] sm:max-w-xs text-xs">
               {stock.name}
             </span>
           </div>
-          <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-mono text-[11px] font-bold border border-emerald-500/20">
+          <span className="px-1.5 sm:px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-mono text-[10px] sm:text-[11px] font-bold border border-emerald-500/20 shrink-0">
             Rp {(stock?.currentPrice ?? 0).toLocaleString()}
           </span>
           <span
-            className={`font-semibold font-mono ${
+            className={`font-semibold font-mono text-[10px] sm:text-xs shrink-0 ${
               (stock?.changePercent24h ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
             }`}
           >
@@ -1259,7 +1262,7 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
           {onToggleWatchlist && (
             <button
               onClick={() => onToggleWatchlist(stock.ticker)}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
+              className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 rounded-lg text-[11px] sm:text-xs font-bold border transition-all cursor-pointer shrink-0 ${
                 isWatchlisted
                   ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
                   : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
@@ -1267,11 +1270,12 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
               title={isWatchlisted ? 'Hapus dari Watchlist' : 'Tambah ke Watchlist'}
             >
               <Star
-                className={`w-3.5 h-3.5 ${
+                className={`w-3.5 h-3.5 shrink-0 ${
                   isWatchlisted ? 'fill-amber-400 text-amber-400' : 'text-slate-400'
                 }`}
               />
-              <span>{isWatchlisted ? 'In Watchlist' : 'Add to Watchlist'}</span>
+              <span className="hidden sm:inline">{isWatchlisted ? 'In Watchlist' : 'Add to Watchlist'}</span>
+              <span className="sm:hidden">{isWatchlisted ? 'Saved' : 'Watch'}</span>
             </button>
           )}
         </div>
@@ -1327,28 +1331,26 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
             </button>
           </div>
 
-          {/* Trendline Drawing Tool */}
+          {/* Trendline Drawing Tool (Icon Only without "Tambah Garis" text) */}
           <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-lg p-1">
             <button
               onClick={() => {
                 setIsDrawingLine(!isDrawingLine);
                 if (isDrawingLine) setLineFirstPoint(null);
               }}
-              className={`px-2.5 py-1 rounded text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-all ${
+              className={`p-1.5 sm:px-2 sm:py-1 rounded text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-all ${
                 isDrawingLine
                   ? 'bg-cyan-500/30 text-cyan-300 border border-cyan-400/60 shadow-sm animate-pulse'
                   : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
               }`}
-              title="Tambah Garis Tren (Klik 2 titik di chart)"
+              title="Gambar Garis Tren (Klik 2 titik pada chart)"
             >
               <PenTool className="w-3.5 h-3.5 text-cyan-400" />
-              <span>
-                {isDrawingLine
-                  ? lineFirstPoint
-                    ? 'Klik Titik 2...'
-                    : 'Klik Titik 1...'
-                  : 'Tambah Garis'}
-              </span>
+              {isDrawingLine && (
+                <span className="text-[10px] font-mono text-cyan-300">
+                  {lineFirstPoint ? 'Pt 2' : 'Pt 1'}
+                </span>
+              )}
             </button>
 
             {customLines.length > 0 && (
@@ -1503,10 +1505,22 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
           </span>
         </div>
 
-        <div className="text-slate-300 font-medium">
-          LONG Setup: R:R 1:{stock?.recommendation?.riskRewardRatio ?? 0} | TP1 +10% | TP2 +20% | SL 4%
-        </div>
+        <button
+          onClick={() => setIsTpModalOpen(true)}
+          className="text-emerald-400 hover:text-emerald-300 font-medium flex items-center gap-1.5 cursor-pointer bg-emerald-500/10 hover:bg-emerald-500/20 px-2 py-0.5 rounded border border-emerald-500/30 transition-all text-[11px]"
+          title="Klik untuk membuka Target Matrix TP1, TP2 & TP3"
+        >
+          <Target className="w-3.5 h-3.5" />
+          <span>LONG Setup: TP1 +10% | TP2 +20% (Detail Targets →)</span>
+        </button>
       </div>
+
+      {/* Interactive Take Profit Targets Matrix Modal */}
+      <TakeProfitModal
+        isOpen={isTpModalOpen}
+        onClose={() => setIsTpModalOpen(false)}
+        stock={stock}
+      />
     </div>
   );
 };

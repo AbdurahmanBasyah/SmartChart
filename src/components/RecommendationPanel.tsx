@@ -16,14 +16,17 @@ import {
   Compass,
   GitBranch,
   ArrowRight,
+  ExternalLink,
 } from 'lucide-react';
 import { StockData, TradeRecommendation } from '../types';
+import { TakeProfitModal } from './TakeProfitModal';
 
 interface RecommendationPanelProps {
   stock: StockData;
 }
 
 export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({ stock }) => {
+  const [isTpModalOpen, setIsTpModalOpen] = useState(false);
   const rec = stock?.recommendation;
 
   // Position Sizing Interactive Calculator
@@ -108,17 +111,28 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({ stock 
           </div>
         </div>
 
-        {/* Target Profit 1 & 2 */}
-        <div className="bg-slate-950/80 border border-emerald-500/30 rounded-xl p-4 relative overflow-hidden">
+        {/* Target Profit 1 & 2 (Clickable Modal Trigger) */}
+        <div
+          onClick={() => setIsTpModalOpen(true)}
+          className="bg-slate-950/80 hover:bg-emerald-950/20 border border-emerald-500/40 hover:border-emerald-400 rounded-xl p-4 relative overflow-hidden cursor-pointer transition-all hover:scale-[1.02] shadow-lg group"
+          title="Klik untuk membuka Target Matrix TP1, TP2 & TP3"
+        >
           <div className="text-[11px] text-emerald-400 font-semibold uppercase tracking-wider mb-1 flex items-center justify-between">
-            <span>Take Profit (TP)</span>
-            <span className="text-xs font-bold">+10% / +20%</span>
+            <span className="flex items-center gap-1">
+              <Target className="w-3.5 h-3.5" />
+              <span>Take Profit (TP)</span>
+            </span>
+            <span className="text-[10px] bg-emerald-500/20 px-1.5 py-0.5 rounded text-emerald-300 font-bold border border-emerald-500/40 group-hover:bg-emerald-500/30 flex items-center gap-0.5">
+              <span>Targets Matrix</span>
+              <ExternalLink className="w-2.5 h-2.5" />
+            </span>
           </div>
           <div className="text-lg font-black text-emerald-400 font-mono">
             Rp {tp1.toLocaleString()} <span className="text-xs text-slate-400 font-normal">/ {tp2.toLocaleString()}</span>
           </div>
-          <div className="text-[11px] text-slate-300 mt-1">
-            Potential Profit: +{rec?.takeProfit1Percent ?? 0}% (TP1) | +{rec?.takeProfit2Percent ?? 0}% (TP2)
+          <div className="text-[11px] text-slate-300 mt-1 flex items-center justify-between">
+            <span>+{rec?.takeProfit1Percent ?? 0}% (TP1) | +{rec?.takeProfit2Percent ?? 0}% (TP2)</span>
+            <span className="text-emerald-400 font-bold text-[10px] group-hover:underline">Detail TP1-TP3 →</span>
           </div>
         </div>
 
@@ -325,6 +339,13 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({ stock 
           </div>
         </div>
       </div>
+
+      {/* Interactive Take Profit Targets Matrix Modal */}
+      <TakeProfitModal
+        isOpen={isTpModalOpen}
+        onClose={() => setIsTpModalOpen(false)}
+        stock={stock}
+      />
     </div>
   );
 };

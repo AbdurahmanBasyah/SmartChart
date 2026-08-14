@@ -77,11 +77,8 @@ async function startServer() {
 
   console.log('Initializing Express app and routes...');
   
-  // Populate liquid stocks in cache synchronously on boot
+  // Populate local stock cache synchronously on boot
   refreshLocalFallback();
-
-  // Kick off background market data preloading
-  preloadRealMarketData().catch((err) => console.error('Error preloading real market data on boot:', err));
 
   // No-cache middleware for dynamic API routes
   app.use('/api', (req, res, next) => {

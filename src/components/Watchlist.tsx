@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Star,
   Trash2,
@@ -13,6 +13,7 @@ import {
   Sparkles,
   Layers,
   Crown,
+  Loader2,
 } from 'lucide-react';
 import { StockData } from '../types';
 import { getSmcSignalPriorityScore } from './StockScreener';
@@ -24,6 +25,17 @@ interface WatchlistProps {
   onRemoveFromWatchlist: (ticker: string) => void;
   onAddStockByTicker: (ticker: string) => Promise<void>;
   onOpenScreener: () => void;
+  onToggleWatchlist?: (ticker: string) => void;
+}
+
+function isMatchingTicker(tickerA?: string, tickerB?: string): boolean {
+  if (!tickerA || !tickerB) return false;
+  const normA = tickerA.toUpperCase().replace('.JK', '');
+  const normB = tickerB.toUpperCase().replace('.JK', '');
+  if (normA === normB) return true;
+  const isIhsgA = normA === '^JKSE' || normA === 'IHSG' || normA === 'JKSE';
+  const isIhsgB = normB === '^JKSE' || normB === 'IHSG' || normB === 'JKSE';
+  return isIhsgA && isIhsgB;
 }
 
 export const Watchlist: React.FC<WatchlistProps> = ({
@@ -33,14 +45,29 @@ export const Watchlist: React.FC<WatchlistProps> = ({
   onRemoveFromWatchlist,
   onAddStockByTicker,
   onOpenScreener,
+  onToggleWatchlist,
 }) => {
   const [addTickerInput, setAddTickerInput] = useState('');
   const [isAdding, setIsAdding] = useState(false);
 
-  // Match saved tickers with stock data and sort by SMC Signal Priority
+  // Find tickers in watchlist that are already loaded in `stocks`
   const watchlistStocks = watchlist
-    .map((ticker) => stocks.find((s) => s.ticker === ticker))
+    .map((ticker) => stocks.find((s) => isMatchingTicker(s.ticker, ticker)))
     .filter(Boolean) as StockData[];
+
+  // Find tickers that were saved to watchlist but are not yet in `stocks` (e.g. non-liquid or custom added stocks)
+  const missingTickers = watchlist.filter(
+    (ticker) => !stocks.some((s) => isMatchingTicker(s.ticker, ticker))
+  );
+
+  // Automatically trigger fetch for any missing watchlist stock in the background
+  useEffect(() => {
+    if (missingTickers.length > 0) {
+      missingTickers.forEach((ticker) => {
+        onAddStockByTicker(ticker);
+      });
+    }
+  }, [missingTickers.join(',')]);
 
   watchlistStocks.sort((a, b) => getSmcSignalPriorityScore(a) - getSmcSignalPriorityScore(b));
 
@@ -53,6 +80,12 @@ export const Watchlist: React.FC<WatchlistProps> = ({
     if (!addTickerInput.trim()) return;
     const clean = addTickerInput.trim().toUpperCase();
     setIsAdding(true);
+    
+    // Ensure ticker is added to watchlist if not present
+    if (!watchlist.includes(clean) && onToggleWatchlist) {
+      onToggleWatchlist(clean);
+    }
+    
     await onAddStockByTicker(clean);
     setIsAdding(false);
     setAddTickerInput('');
@@ -146,15 +179,15 @@ export const Watchlist: React.FC<WatchlistProps> = ({
       </div>
 
       {/* Main Watchlist Cards Grid */}
-      {watchlistStocks.length === 0 ? (
+      {watchlist.length === 0 ? (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center space-y-4">
           <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mx-auto">
             <Star className="w-8 h-8" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-white">Watchlist is Empty</h3>
+            <h3 className="text-lg font-bold text-white">Watchlist Masih Kosong</h3>
             <p className="text-slate-400 text-xs mt-1 max-w-md mx-auto">
-              No stocks added to your watchlist yet. Use the search bar above or explore the Screener to bookmark your favorite stocks.
+              Belum ada saham yang disimpan ke watchlist. Gunakan pencarian di atas atau jelajahi Screener untuk menandai saham pilihan Anda.
             </p>
           </div>
           <button
@@ -162,11 +195,39 @@ export const Watchlist: React.FC<WatchlistProps> = ({
             className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-4 py-2.5 rounded-xl text-xs inline-flex items-center gap-2 cursor-pointer shadow-lg shadow-emerald-500/20"
           >
             <Sparkles className="w-4 h-4" />
-            <span>Open SMC Stock Screener</span>
+            <span>Buka SMC Stock Screener</span>
           </button>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {/* Missing / Fetching in Background Placeholders */}
+          {missingTickers.map((ticker) => (
+            <div
+              key={ticker}
+              className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-xl animate-pulse"
+            >
+              <div className="flex items-start justify-between">
+                <div>
+                  <span className="text-lg font-black text-white font-mono">{ticker}</span>
+                  <div className="text-xs text-amber-400 mt-1 flex items-center gap-1.5">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Memuat data pasar terkini...</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => onRemoveFromWatchlist(ticker)}
+                  className="text-slate-500 hover:text-rose-400 p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                  title="Hapus dari Watchlist"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="bg-slate-950/80 rounded-xl p-3 h-24 flex items-center justify-center text-xs text-slate-500">
+                Mengambil data candlestick & SMC engine...
+              </div>
+            </div>
+          ))}
+
           {watchlistStocks.map((stock) => {
             const rec = stock.recommendation;
             const entryMin = rec?.entryZone?.[0] ?? 0;

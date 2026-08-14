@@ -337,40 +337,13 @@ export const ParallaxHero: React.FC<ParallaxHeroProps> = ({
           </motion.div>
 
           {/* Right Column: 3D Interactive Model Showcase with Mouse Parallax Tilt */}
-          <motion.div style={{ y: modelY }} className="lg:col-span-5 flex justify-center">
+          <motion.div style={{ y: modelY }} className="lg:col-span-5 flex justify-center items-center">
             <motion.div
               style={{ rotateX, rotateY, transformStyle: 'preserve-3d' }}
-              className="w-full bg-slate-900/80 border border-slate-800/90 rounded-3xl p-6 shadow-2xl relative overflow-hidden backdrop-blur-xl group hover:border-emerald-500/40 transition-colors"
+              className="w-full bg-transparent border-0 p-0 sm:p-2 relative overflow-hidden flex items-center justify-center"
             >
-              {/* Card Top Label */}
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2 text-xs font-mono font-bold text-emerald-400">
-                  <Box className="w-4 h-4 text-emerald-400" />
-                  <span>Interactive 3D SMC Model</span>
-                </div>
-                <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-[10px] text-emerald-300 border border-emerald-500/30 font-mono">
-                  3D Depth
-                </span>
-              </div>
-
               {/* 3D Canvas Rendering */}
               <Interactive3dSmcModel />
-
-              {/* Parallax Card Footer Stats */}
-              <div className="grid grid-cols-3 gap-2 mt-2 pt-3 border-t border-slate-800/80 text-center font-mono text-[11px]">
-                <div className="bg-slate-950/70 p-2 rounded-xl border border-slate-800">
-                  <span className="text-[10px] text-slate-400 block">POI Zone</span>
-                  <strong className="text-purple-400">Demand OB</strong>
-                </div>
-                <div className="bg-slate-950/70 p-2 rounded-xl border border-slate-800">
-                  <span className="text-[10px] text-slate-400 block">FVG Gap</span>
-                  <strong className="text-emerald-400">1D Bullish</strong>
-                </div>
-                <div className="bg-slate-950/70 p-2 rounded-xl border border-slate-800">
-                  <span className="text-[10px] text-slate-400 block">Structure</span>
-                  <strong className="text-sky-400">BOS Confirm</strong>
-                </div>
-              </div>
             </motion.div>
           </motion.div>
         </div>

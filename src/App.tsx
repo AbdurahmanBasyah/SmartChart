@@ -79,6 +79,26 @@ export default function App() {
         initialList = getMockStocks();
       }
 
+      // Merge saved custom/user-added stocks from localStorage
+      try {
+        const cachedCustom = localStorage.getItem('smc_custom_stocks');
+        if (cachedCustom) {
+          const parsed: StockData[] = JSON.parse(cachedCustom);
+          if (parsed && Array.isArray(parsed)) {
+            parsed.forEach((customStock) => {
+              const idx = initialList.findIndex((s) => isMatchingTicker(s.ticker, customStock.ticker));
+              if (idx >= 0) {
+                initialList[idx] = customStock;
+              } else {
+                initialList.push(customStock);
+              }
+            });
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+
       if (isMounted) {
         setStocks(initialList);
         const brpt = initialList.find((s) => s.ticker === 'BRPT') || initialList[0];
@@ -86,21 +106,34 @@ export default function App() {
         setLoading(false);
       }
 
-      // Immediately fetch real live market data for top liquid stocks and active selection
+      // Immediately fetch real live market data for top liquid stocks and all watchlist items
       const syncRealData = async () => {
         if (!isMounted) return;
         try {
           const { fetchYahooStockData } = await import('./services/yahooFinance');
-          const primaryTickers = ['^JKSE', 'BRPT', 'BBCA', 'BBRI', 'BMRI', 'ADRO', 'BUMI', 'CUAN', 'BREN', 'GOTO'];
+          const primaryTickers = Array.from(
+            new Set(['^JKSE', 'BRPT', 'BBCA', 'BBRI', 'BMRI', 'ADRO', 'BUMI', 'CUAN', 'BREN', 'GOTO', ...watchlist])
+          );
           
           await Promise.allSettled(
             primaryTickers.map(async (t) => {
               try {
                 const live = await fetchYahooStockData(t);
                 if (isMounted && live && live.candles && live.candles.length > 0) {
-                  setStocks((prev) =>
-                    prev.map((s) => (isMatchingTicker(s.ticker, live.ticker) ? live : s))
-                  );
+                  setStocks((prev) => {
+                    const exists = prev.some((s) => isMatchingTicker(s.ticker, live.ticker));
+                    const updated = exists
+                      ? prev.map((s) => (isMatchingTicker(s.ticker, live.ticker) ? live : s))
+                      : [live, ...prev];
+                    
+                    // Persist real data to local storage
+                    try {
+                      const toCache = updated.filter((s) => s.isRealData);
+                      localStorage.setItem('smc_custom_stocks', JSON.stringify(toCache));
+                    } catch (e) {}
+
+                    return updated;
+                  });
                   setSelectedStock((curr) => (isMatchingTicker(curr?.ticker, live.ticker) ? live : curr));
                 }
               } catch (err) {
@@ -249,9 +282,16 @@ export default function App() {
       if (stockData && stockData.candles && stockData.candles.length > 0) {
         setStocks((prev) => {
           const exists = prev.some((s) => isMatchingTicker(s.ticker, stockData!.ticker));
-          return exists
+          const updated = exists
             ? prev.map((s) => (isMatchingTicker(s.ticker, stockData!.ticker) ? stockData! : s))
             : [stockData!, ...prev];
+          
+          try {
+            const toCache = updated.filter((s) => s.isRealData);
+            localStorage.setItem('smc_custom_stocks', JSON.stringify(toCache));
+          } catch (e) {}
+
+          return updated;
         });
         setSelectedStock(stockData);
       }
@@ -414,6 +454,7 @@ export default function App() {
               onRemoveFromWatchlist={handleToggleWatchlist}
               onAddStockByTicker={handleFetchNewStock}
               onOpenScreener={() => setActiveTab('screener')}
+              onToggleWatchlist={handleToggleWatchlist}
             />
           </div>
         )}
