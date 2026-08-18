@@ -113,6 +113,8 @@ export interface TradeRecommendation {
   takeProfit1Percent: number;
   takeProfit2: number;
   takeProfit2Percent: number;
+  takeProfit3?: number;
+  takeProfit3Percent?: number;
   riskRewardRatio: number;
   volumeConfirmation: boolean;
   volumeRatio: number;
@@ -881,18 +883,39 @@ export function generateRecommendation(
     });
   }
 
+  const lastCandle = candles && candles.length > 0 ? candles[candles.length - 1] : null;
+  const prevCandle = candles && candles.length >= 2 ? candles[candles.length - 2] : null;
+  const dailyGain = prevCandle && prevCandle.close > 0 && lastCandle
+    ? (lastCandle.close - prevCandle.close) / prevCandle.close
+    : 0;
+
+  const isBreakoutRising =
+    (dailyGain >= 0.035) ||
+    (lastCandle != null &&
+      prevCandle != null &&
+      lastCandle.close > prevCandle.high * 1.01 &&
+      (volumeRatio >= 1.1 || volumeConfirmation || dailyGain >= 0.02));
+
   if (candidates.length > 0) {
     candidates.sort((a, b) => a.dist - b.dist);
     const chosen = candidates[0];
-    entryMin = chosen.min;
-    entryMax = chosen.max;
-    primaryZoneType = chosen.type;
-    primaryZonePrice = chosen.max;
-    reasoning.push(chosen.desc);
+    if (chosen.dist <= currentPrice * 0.15) {
+      entryMin = chosen.min;
+      entryMax = chosen.max;
+      primaryZoneType = chosen.type;
+      primaryZonePrice = chosen.max;
+      reasoning.push(chosen.desc);
+    } else {
+      primaryZoneType = 'NONE';
+      entryMin = chosen.min;
+      entryMax = chosen.max;
+      reasoning.push(`Breakout Expansion: Price surged far above previous POI (Rp ${chosen.max.toLocaleString()}). Awaiting fresh FVG creation on current leg.`);
+    }
   } else {
-    entryMin = Math.round(currentPrice * 0.97);
-    entryMax = currentPrice;
-    reasoning.push(`Accumulation range near Rp ${entryMin.toLocaleString()} - ${entryMax.toLocaleString()}`);
+    primaryZoneType = 'NONE';
+    entryMin = Math.round(currentPrice * 0.90);
+    entryMax = Math.round(currentPrice * 0.94);
+    reasoning.push(`Strong Momentum Breakout. No bullish FVG/OB formed on this leg yet. Awaiting fresh FVG creation.`);
   }
 
   if (entryMax - entryMin > entryMax * 0.05) {
@@ -910,18 +933,35 @@ export function generateRecommendation(
   const slDistance = Math.max(1, entryMax - stopLoss);
   const stopLossPercent = parseFloat(((slDistance / entryMax) * 100).toFixed(1));
 
-  let tp1 = addIdxTicks(entryMax, Math.round((slDistance * 2.2) / getIdxTickSize(entryMax, isIhsg)), isIhsg);
-  let tp2 = addIdxTicks(entryMax, Math.round((slDistance * 3.8) / getIdxTickSize(entryMax, isIhsg)), isIhsg);
+  let tp1 = addIdxTicks(entryMax, Math.max(2, Math.round((slDistance * 2.2) / getIdxTickSize(entryMax, isIhsg))), isIhsg);
   tp1 = roundToIdxTick(tp1, isIhsg);
+  if (tp1 <= entryMax) {
+    tp1 = addIdxTicks(entryMax, 2, isIhsg);
+  }
+
+  let tp2 = addIdxTicks(tp1, Math.max(2, Math.round((slDistance * 2.0) / getIdxTickSize(tp1, isIhsg))), isIhsg);
   tp2 = roundToIdxTick(tp2, isIhsg);
+  if (tp2 <= tp1) {
+    tp2 = addIdxTicks(tp1, Math.max(2, Math.round(tp1 * 0.08 / getIdxTickSize(tp1, isIhsg))), isIhsg);
+  }
+
+  let tp3 = addIdxTicks(tp2, Math.max(2, Math.round((slDistance * 2.5) / getIdxTickSize(tp2, isIhsg))), isIhsg);
+  tp3 = roundToIdxTick(tp3, isIhsg);
+  if (tp3 <= tp2) {
+    tp3 = addIdxTicks(tp2, Math.max(2, Math.round(tp2 * 0.10 / getIdxTickSize(tp2, isIhsg))), isIhsg);
+  }
 
   const tp1Percent = parseFloat((((tp1 - entryMax) / entryMax) * 100).toFixed(1));
   const tp2Percent = parseFloat((((tp2 - entryMax) / entryMax) * 100).toFixed(1));
+  const tp3Percent = parseFloat((((tp3 - entryMax) / entryMax) * 100).toFixed(1));
 
   const riskRewardRatio = parseFloat((tp1Percent / Math.max(0.1, stopLossPercent)).toFixed(2));
 
   // Determine signal status
-  const isOnBuyArea = currentPrice >= entryMin && currentPrice <= entryMax;
+  const hasConfirmedPoi = primaryZoneType !== 'NONE';
+  const isOnBuyArea = hasConfirmedPoi && currentPrice >= entryMin && currentPrice <= entryMax;
+  const isNearEntry = hasConfirmedPoi && !isBreakoutRising && currentPrice > entryMax && currentPrice <= entryMax * 1.03;
+
   let status: TradeRecommendation['status'] = 'WAIT_PULLBACK_FVG';
 
   if (isOnBuyArea && volumeConfirmation) {
@@ -930,21 +970,27 @@ export function generateRecommendation(
     status = 'ON_BUY_AREA';
   } else if (currentPrice < entryMin && currentPrice >= entryMin * 0.95) {
     status = 'TAPPED_POI_REBOUND';
+  } else if (isBreakoutRising || !hasConfirmedPoi || (currentPrice > entryMax * 1.08 && !activeBullFvgs.some(f => f.top >= currentPrice * 0.90))) {
+    status = 'WAIT_FVG_CREATION';
+  } else if (isNearEntry) {
+    status = 'NEAR_ENTRY';
   } else if (structure === 'SIDEWAYS') {
     status = 'SIDEWAYS_ACCUMULATION';
+  } else if (currentPrice > entryMax) {
+    status = 'WAIT_PULLBACK_FVG';
   } else {
-    status = 'NEAR_ENTRY';
+    status = 'WAIT_VOLUME_CONFIRMATION';
   }
 
   const scenario: SmcScenario = {
     title: `${structure === 'RALLYING' ? 'Bullish Expansion' : 'Accumulation Retest'} Scenario`,
     type: structure === 'RALLYING' ? 'BOS_CONTINUATION' : 'PULLBACK_RETEST',
     probability: volumeConfirmation ? 'VERY HIGH' : 'HIGH',
-    targetDescription: `Target TP1 at Rp ${tp1.toLocaleString()} (${tp1Percent}%)`,
+    targetDescription: `Target TP1: Rp ${tp1.toLocaleString()} (+${tp1Percent}%) | TP2: Rp ${tp2.toLocaleString()} | TP3: Rp ${tp3.toLocaleString()}`,
     steps: [
       `Price pulls back to test ${primaryZoneType} area at Rp ${entryMin.toLocaleString()} - ${entryMax.toLocaleString()}`,
       `Smart money absorbs sell volume with institutional volume spike`,
-      `Impulsive rebound towards TP1 (Rp ${tp1.toLocaleString()}) and TP2 (Rp ${tp2.toLocaleString()})`
+      `Impulsive rebound towards TP1 (Rp ${tp1.toLocaleString()}), TP2 (Rp ${tp2.toLocaleString()}), and TP3 (Rp ${tp3.toLocaleString()})`
     ]
   };
 
@@ -960,6 +1006,8 @@ export function generateRecommendation(
     takeProfit1Percent: tp1Percent,
     takeProfit2: tp2,
     takeProfit2Percent: tp2Percent,
+    takeProfit3: tp3,
+    takeProfit3Percent: tp3Percent,
     riskRewardRatio,
     volumeConfirmation,
     volumeRatio,
@@ -1231,10 +1279,6 @@ export const liquidIDXStocks: StockRawConfig[] = [
   { t: "ASSA", n: "PT Adi Sarana Armada Tbk.", s: "Industrials", p: 780, cg: "Grup Triputra" },
   { t: "SRTG", n: "PT Saratoga Investama Sedaya Tbk.", s: "Financials", p: 2350, cg: "Grup Saratoga" },
   { t: "PALM", n: "PT Provident Investama Tbk.", s: "Financials", p: 420, cg: "Grup Saratoga" },
-  { t: "MNCN", n: "PT Media Nusantara Citra Tbk.", s: "Telecommunication", p: 320, cg: "Grup MNC" },
-  { t: "BHIT", n: "PT MNC Asia Holding Tbk.", s: "Financials", p: 50, cg: "Grup MNC" },
-  { t: "KPIG", n: "PT MNC Land Tbk.", s: "Properties", p: 180, cg: "Grup MNC" },
-  { t: "BCAP", n: "PT MNC Kapital Indonesia Tbk.", s: "Financials", p: 85, cg: "Grup MNC" },
   { t: "PNBN", n: "PT Bank Pan Indonesia Tbk.", s: "Financials", p: 1250, cg: "Grup Panin" },
   { t: "PNLF", n: "PT Panin Financial Tbk.", s: "Financials", p: 310, cg: "Grup Panin" },
   { t: "BBRI", n: "PT Bank Rakyat Indonesia Tbk.", s: "Financials", p: 4850 },

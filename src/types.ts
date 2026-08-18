@@ -103,6 +103,8 @@ export interface TradeRecommendation {
   takeProfit1Percent: number;
   takeProfit2: number; // TP2 ~ 20%
   takeProfit2Percent: number;
+  takeProfit3?: number; // TP3 ~ 30-35%
+  takeProfit3Percent?: number;
   riskRewardRatio: number; // Minimum 1:1.5
   volumeConfirmation: boolean;
   volumeRatio: number; // Volume / Volume MA20

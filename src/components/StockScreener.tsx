@@ -44,12 +44,11 @@ export function getSmcSignalPriorityScore(stock: StockData): number {
   const isOnBuyArea =
     rec?.isOnBuyArea ||
     status === 'ON_BUY_AREA' ||
-    (currentP >= entryMin && currentP <= entryMax);
+    (currentP >= entryMin && currentP <= entryMax && rec?.primaryZoneType !== 'NONE');
   if (isOnBuyArea && status !== 'NO_ENTRY') return 2;
 
   // 3. Dekat entry area 0-3%
-  const isNear = status === 'NEAR_ENTRY' || (currentP >= entryMin * 0.97 && currentP <= entryMax * 1.04);
-  if (isNear && status !== 'NO_ENTRY') return 3;
+  if (status === 'NEAR_ENTRY') return 3;
 
   // 4. Wait fvg
   if (status === 'WAIT_FVG_CREATION') return 4;
@@ -138,11 +137,9 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
         const entryMax = rec?.entryZone?.[1] ?? cp;
         const isOnBuyArea = cp >= entryMin && cp <= entryMax;
         const isNearEntry =
-          isOnBuyArea ||
           rec?.status === 'TAPPED_POI_REBOUND' ||
           rec?.status === 'ON_BUY_AREA' ||
-          rec?.status === 'NEAR_ENTRY' ||
-          (cp >= entryMin * 0.95 && cp <= entryMax * 1.04);
+          rec?.status === 'NEAR_ENTRY';
 
         const upside = cp > 0 && tp1 > cp ? ((tp1 - cp) / cp) * 100 : 0;
 
@@ -245,16 +242,12 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
       } else if (filters.signalStatus === 'ON_BUY_AREA') {
         const isBuyArea = rec?.isOnBuyArea || rec?.status === 'ON_BUY_AREA' || (
           (stock.currentPrice ?? 0) >= (rec?.entryZone?.[0] ?? 0) &&
-          (stock.currentPrice ?? 0) <= (rec?.entryZone?.[1] ?? 0)
+          (stock.currentPrice ?? 0) <= (rec?.entryZone?.[1] ?? 0) &&
+          rec?.primaryZoneType !== 'NONE'
         );
         if (!isBuyArea) return false;
       } else if (filters.signalStatus === 'NEAR_ENTRY') {
-        const entryMin = rec?.entryZone?.[0] ?? 0;
-        const entryMax = rec?.entryZone?.[1] ?? 0;
-        const currentP = stock.currentPrice ?? 0;
-        // Near entry zone: current price is within -2% to +4% of the entry range
-        const isNear = currentP >= entryMin * 0.98 && currentP <= entryMax * 1.04;
-        if (!isNear) return false;
+        if (rec?.status !== 'NEAR_ENTRY') return false;
       } else if (filters.signalStatus === 'WAIT_FVG_CREATION') {
         if (rec?.status !== 'WAIT_FVG_CREATION') return false;
       } else {

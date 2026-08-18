@@ -14,6 +14,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { StockData } from '../types';
+import { getIdxTickSize, roundToIdxTick, addIdxTicks } from '../utils/idxTickRules';
 
 interface TakeProfitModalProps {
   isOpen: boolean;
@@ -28,26 +29,52 @@ export const TakeProfitModal: React.FC<TakeProfitModalProps> = ({
 }) => {
   if (!isOpen || !stock) return null;
 
+  const isIhsg = stock.symbol.includes('JKSE') || stock.ticker === 'IHSG';
   const rec = stock.recommendation;
-  const currentPrice = stock.currentPrice || 100;
-  const entryMin = rec?.entryZone?.[0] || currentPrice * 0.98;
-  const entryMax = rec?.entryZone?.[1] || currentPrice;
-  const baseEntry = Math.round((entryMin + entryMax) / 2);
-  const sl = rec?.stopLoss || Math.round(baseEntry * 0.96);
+  const currentPrice = roundToIdxTick(stock.currentPrice || 100, isIhsg);
+  const entryMin = roundToIdxTick(rec?.entryZone?.[0] || currentPrice * 0.98, isIhsg);
+  const entryMax = roundToIdxTick(rec?.entryZone?.[1] || currentPrice, isIhsg);
+  const rawBase = (entryMin + entryMax) / 2;
+  const baseEntry = roundToIdxTick(rawBase, isIhsg);
+  const sl = roundToIdxTick(
+    rec?.stopLoss || addIdxTicks(baseEntry, -Math.max(2, Math.round((baseEntry * 0.04) / getIdxTickSize(baseEntry, isIhsg))), isIhsg),
+    isIhsg
+  );
   const riskAmount = Math.max(1, baseEntry - sl);
 
-  // Targets calculation
-  const tp1Price = rec?.takeProfit1 || Math.round(baseEntry * 1.10);
+  // Targets calculation with strict BEI fractions and guaranteed TP3 > TP2 > TP1 > Entry hierarchy
+  let tp1Price = roundToIdxTick(
+    rec?.takeProfit1 || addIdxTicks(baseEntry, Math.max(2, Math.round((baseEntry * 0.10) / getIdxTickSize(baseEntry, isIhsg))), isIhsg),
+    isIhsg
+  );
+  if (tp1Price <= baseEntry) {
+    tp1Price = addIdxTicks(baseEntry, 2, isIhsg);
+  }
+
+  let tp2Price = roundToIdxTick(
+    rec?.takeProfit2 || addIdxTicks(tp1Price, Math.max(2, Math.round((baseEntry * 0.10) / getIdxTickSize(baseEntry, isIhsg))), isIhsg),
+    isIhsg
+  );
+  if (tp2Price <= tp1Price) {
+    tp2Price = addIdxTicks(tp1Price, Math.max(2, Math.round((tp1Price * 0.08) / getIdxTickSize(tp1Price, isIhsg))), isIhsg);
+  }
+
+  let tp3Price = roundToIdxTick(
+    rec?.takeProfit3 || addIdxTicks(tp2Price, Math.max(2, Math.round((baseEntry * 0.15) / getIdxTickSize(baseEntry, isIhsg))), isIhsg),
+    isIhsg
+  );
+  if (tp3Price <= tp2Price) {
+    tp3Price = addIdxTicks(tp2Price, Math.max(2, Math.round((tp2Price * 0.10) / getIdxTickSize(tp2Price, isIhsg))), isIhsg);
+  }
+
   const tp1Upside = (((tp1Price - baseEntry) / baseEntry) * 100).toFixed(1);
-  const tp1Rr = ( (tp1Price - baseEntry) / riskAmount ).toFixed(1);
+  const tp1Rr = ((tp1Price - baseEntry) / riskAmount).toFixed(1);
 
-  const tp2Price = rec?.takeProfit2 || Math.round(baseEntry * 1.20);
   const tp2Upside = (((tp2Price - baseEntry) / baseEntry) * 100).toFixed(1);
-  const tp2Rr = ( (tp2Price - baseEntry) / riskAmount ).toFixed(1);
+  const tp2Rr = ((tp2Price - baseEntry) / riskAmount).toFixed(1);
 
-  const tp3Price = Math.round(baseEntry * 1.35);
   const tp3Upside = (((tp3Price - baseEntry) / baseEntry) * 100).toFixed(1);
-  const tp3Rr = ( (tp3Price - baseEntry) / riskAmount ).toFixed(1);
+  const tp3Rr = ((tp3Price - baseEntry) / riskAmount).toFixed(1);
 
   // Interactive Capital & Lot Size Calculator
   const [lotInput, setLotInput] = useState<number>(50); // 50 Lots default
@@ -60,8 +87,14 @@ export const TakeProfitModal: React.FC<TakeProfitModalProps> = ({
   const riskAtSl = totalShares * (baseEntry - sl);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl p-6 relative text-slate-100 space-y-6">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200"
+      onClick={onClose}
+    >
+      <div
+        className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl p-6 relative text-slate-100 space-y-6"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Close Button */}
         <button
           onClick={onClose}

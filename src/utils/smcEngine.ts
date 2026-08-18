@@ -1020,15 +1020,25 @@ export function generateRecommendation(
     if (candidates.length > 0) {
       candidates.sort((a, b) => a.dist - b.dist);
       const chosen = candidates[0];
-      entryMin = chosen.min;
-      entryMax = chosen.max;
-      primaryZoneType = chosen.type;
-      primaryZonePrice = chosen.max;
-      reasoning.push(chosen.desc);
+      // Only treat as primary POI if it is within reasonable swing distance (< 15% from current price)
+      if (chosen.dist <= currentPrice * 0.15) {
+        entryMin = chosen.min;
+        entryMax = chosen.max;
+        primaryZoneType = chosen.type;
+        primaryZonePrice = chosen.max;
+        reasoning.push(chosen.desc);
+      } else {
+        // Historical POI is too far below (e.g. at 160 while price surged to 240). Awaiting fresh FVG on this expansion leg!
+        primaryZoneType = 'NONE';
+        entryMin = chosen.min;
+        entryMax = chosen.max;
+        reasoning.push(`Breakout Expansion: Price surged far above previous POI (Rp ${chosen.max.toLocaleString()}). Awaiting fresh FVG creation on current leg.`);
+      }
     } else {
-      entryMin = Math.round(currentPrice * 0.96);
-      entryMax = Math.round(currentPrice * 0.985);
-      reasoning.push(`Strong Uptrend Rally. Awaiting normal ~2-3% pullback for a precise Long entry.`);
+      primaryZoneType = 'NONE';
+      entryMin = Math.round(currentPrice * 0.90);
+      entryMax = Math.round(currentPrice * 0.94);
+      reasoning.push(`Strong Momentum Breakout. No bullish FVG/OB formed on this leg yet. Awaiting fresh FVG creation.`);
     }
   } else {
     // Downtrend
@@ -1101,14 +1111,19 @@ export function generateRecommendation(
   stopLoss = roundToIdxTick(stopLoss, isIhsg);
   const stopLossPercentVal = Number((((entryMax - stopLoss) / entryMax) * 100).toFixed(1));
 
-  // Check condition for WAIT_FVG_CREATION:
+  // Check condition for WAIT_FVG_CREATION (Momentum breakout or expansion candle):
   const lastCandle = candles && candles.length > 0 ? candles[candles.length - 1] : null;
   const prevCandle = candles && candles.length >= 2 ? candles[candles.length - 2] : null;
+  const dailyGain = prevCandle && prevCandle.close > 0 && lastCandle
+    ? (lastCandle.close - prevCandle.close) / prevCandle.close
+    : 0;
+
   const isBreakoutRising =
-    lastCandle != null &&
-    prevCandle != null &&
-    lastCandle.close > prevCandle.high &&
-    (volumeRatio >= 1.2 || volumeConfirmation);
+    (dailyGain >= 0.035) ||
+    (lastCandle != null &&
+      prevCandle != null &&
+      lastCandle.close > prevCandle.high * 1.01 &&
+      (volumeRatio >= 1.1 || volumeConfirmation || dailyGain >= 0.02));
 
   // Take Profit: Order Blocks, FVGs, Price Gaps, and Swing Highs above entry zone serve as Take Profit targets
   const activeBearObs = orderBlocks.filter((o) => o.type === 'bearish' && !o.mitigated);
@@ -1139,6 +1154,9 @@ export function generateRecommendation(
     validTp1s.sort((a, b) => Math.abs(a - idealTp1) - Math.abs(b - idealTp1));
     takeProfit1 = roundToIdxTick(validTp1s[0], isIhsg);
   }
+  if (takeProfit1 <= entryMax) {
+    takeProfit1 = addIdxTicks(entryMax, 2, isIhsg);
+  }
 
   const idealTp2 = entryMax * 1.20; // ~20%
   let takeProfit2 = roundToIdxTick(idealTp2, isIhsg);
@@ -1149,9 +1167,26 @@ export function generateRecommendation(
   } else {
     takeProfit2 = roundToIdxTick(Math.max(takeProfit1 * 1.08, entryMax * 1.20), isIhsg);
   }
+  if (takeProfit2 <= takeProfit1) {
+    takeProfit2 = addIdxTicks(takeProfit1, Math.max(2, Math.round(takeProfit1 * 0.08 / getIdxTickSize(takeProfit1, isIhsg))), isIhsg);
+  }
+
+  const idealTp3 = entryMax * 1.35; // ~35%
+  let takeProfit3 = roundToIdxTick(idealTp3, isIhsg);
+  const validTp3s = resistancePool.filter((p) => p >= takeProfit2 * 1.05);
+  if (validTp3s.length > 0) {
+    validTp3s.sort((a, b) => Math.abs(a - idealTp3) - Math.abs(b - idealTp3));
+    takeProfit3 = roundToIdxTick(validTp3s[0], isIhsg);
+  } else {
+    takeProfit3 = roundToIdxTick(Math.max(takeProfit2 * 1.10, entryMax * 1.35), isIhsg);
+  }
+  if (takeProfit3 <= takeProfit2) {
+    takeProfit3 = addIdxTicks(takeProfit2, Math.max(2, Math.round(takeProfit2 * 0.10 / getIdxTickSize(takeProfit2, isIhsg))), isIhsg);
+  }
 
   const tp1PercentVal = Number((((takeProfit1 - entryMax) / entryMax) * 100).toFixed(1));
   const tp2PercentVal = Number((((takeProfit2 - entryMax) / entryMax) * 100).toFixed(1));
+  const tp3PercentVal = Number((((takeProfit3 - entryMax) / entryMax) * 100).toFixed(1));
 
   // Risk Reward Calculation: Risk = (Entry - StopLoss), Reward = (TP1 - Entry)
   const risk = Math.max(1, entryMax - stopLoss);
@@ -1159,8 +1194,10 @@ export function generateRecommendation(
   const riskRewardRatio = Number((reward / risk).toFixed(2));
 
   // Check if price is inside entry zone
-  const isOnBuyArea = currentPrice >= entryMin && currentPrice <= entryMax;
-  const isNearEntry = currentPrice >= entryMin * 0.97 && currentPrice <= entryMax * 1.04;
+  const hasConfirmedPoi = primaryZoneType !== 'NONE';
+  const isOnBuyArea = hasConfirmedPoi && currentPrice >= entryMin && currentPrice <= entryMax;
+  // Near entry is ONLY when confirmed POI exists, price is not on an explosive breakout leg, and price is strictly 0.1% to 3.0% above entryMax
+  const isNearEntry = hasConfirmedPoi && !isBreakoutRising && currentPrice > entryMax && currentPrice <= entryMax * 1.03;
 
   // Check if a closed candle tapped into an active DEMAND POI (Bullish OB / Bullish FVG / Bullish Gap)
   // RULE: The POI MUST have been formed by earlier candles (not created by the candle itself)
@@ -1212,20 +1249,20 @@ export function generateRecommendation(
     reasoning.unshift(
       `🎯 IN BUY ZONE: Current price (Rp ${currentPrice.toLocaleString()}) is inside the SMC Buy Zone (Rp ${entryMin.toLocaleString()} - ${entryMax.toLocaleString()}).`
     );
-  } else if (isNearEntry && currentPrice > entryMax) {
+  } else if (isBreakoutRising || !hasConfirmedPoi || (currentPrice > entryMax * 1.08 && !activeBullFvgs.some(f => f.top >= currentPrice * 0.90))) {
+    status = 'WAIT_FVG_CREATION';
+    reasoning.unshift(
+      `⏳ AWAITING FVG CREATION: Price is in active momentum expansion (+${(dailyGain * 100).toFixed(1)}%). Awaiting candle close & 3-candle sequence to establish a fresh Bullish Fair Value Gap (FVG) / Order Block.`
+    );
+  } else if (isNearEntry) {
     status = 'NEAR_ENTRY';
     reasoning.unshift(
       `📍 NEAR ENTRY (0-3%): Current price (Rp ${currentPrice.toLocaleString()}) is sitting 0-3% above the SMC Buy Zone (Rp ${entryMin.toLocaleString()} - ${entryMax.toLocaleString()}).`
     );
-  } else if (isBreakoutRising && currentPrice > entryMax) {
-    status = 'WAIT_FVG_CREATION';
-    reasoning.push(
-      `MOMENTUM BREAKOUT: Price jumped above previous High with heavy volume (${volumeRatio.toFixed(1)}x 20-MA). Awaiting new FVG creation.`
-    );
   } else if (currentPrice > entryMax) {
     status = 'WAIT_PULLBACK_FVG';
     reasoning.push(
-      `WAIT PULLBACK: Price is above ideal entry range; waiting for pullback to FVG/OB.`
+      `📉 WAIT PULLBACK: Price (Rp ${currentPrice.toLocaleString()}) is above ideal entry range (Rp ${entryMin.toLocaleString()} - ${entryMax.toLocaleString()}); waiting for pullback to FVG/OB.`
     );
   } else if (volumeConfirmation && currentPrice <= entryMax * 1.02) {
     status = 'STRONG_BUY_POI';
@@ -1271,6 +1308,8 @@ export function generateRecommendation(
     takeProfit1Percent: tp1PercentVal,
     takeProfit2,
     takeProfit2Percent: tp2PercentVal,
+    takeProfit3,
+    takeProfit3Percent: tp3PercentVal,
     riskRewardRatio,
     volumeConfirmation,
     volumeRatio: Number(volumeRatio.toFixed(2)),
