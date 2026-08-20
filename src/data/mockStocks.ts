@@ -11,7 +11,6 @@ import {
   detectSupportResistance,
   generateRecommendation,
 } from "../utils/smcEngine";
-import { analyzeElliottWave, filterTradingDays } from "../utils/elliottWaveEngine";
 
 // Seeded pseudo random generator for reproducible chart candles
 function seededRandom(seed: number) {
@@ -163,7 +162,6 @@ export function buildStockData(
   const orderBlocks = detectOrderBlocks(candles, swings, fvgs, volumeMa20);
   const liquiditySweeps = detectLiquiditySweeps(candles, swings);
   const supportResistance = detectSupportResistance(candles);
-  const elliottWave = analyzeElliottWave(candles, swings, currentPrice, isIhsg);
 
   const recommendation = generateRecommendation(
     symbol,
@@ -185,7 +183,6 @@ export function buildStockData(
     conglomerate,
     candles,
     swings,
-    elliottWave,
     fvgs,
     orderBlocks,
     priceGaps,

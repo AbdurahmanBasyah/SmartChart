@@ -20,7 +20,6 @@ import {
 } from 'lucide-react';
 import { StockData, TradeRecommendation } from '../types';
 import { TakeProfitModal } from './TakeProfitModal';
-import { ElliottWaveCard } from './ElliottWaveCard';
 
 interface RecommendationPanelProps {
   stock: StockData;
@@ -205,9 +204,6 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({ stock 
           </span>
         </div>
       </div>
-
-      {/* Elliott Wave Cycle & Validation Principle Card */}
-      <ElliottWaveCard stock={stock} />
 
       {/* SMC Scenario Roadmap Projection Card */}
       {rec?.mostLikelyScenario && (

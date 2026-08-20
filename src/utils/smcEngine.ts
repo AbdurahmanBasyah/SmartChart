@@ -12,7 +12,6 @@ import {
   SmcScenario,
 } from '../types';
 import { roundToIdxTick, addIdxTicks, getIdxTickSize, countIdxTicksBetween } from './idxTickRules';
-import { filterTradingDays } from './elliottWaveEngine';
 
 /**
  * Calculates Moving Average
@@ -1142,7 +1141,7 @@ export function generateSmcScenario(
   if (status === 'ON_BUY_AREA') {
     return {
       title: 'Primary SMC Scenario: Optimal Entry Execution in Demand Buy Zone',
-      type: 'ELLIOTT_IMPULSE_EXPANSION',
+      type: 'IMPULSE_EXPANSION',
       probability: 'VERY HIGH',
       targetDescription: `Buy Area: Rp ${entryMin.toLocaleString()} - Rp ${entryMax.toLocaleString()} | Target TP1: Rp ${tp1.toLocaleString()}`,
       steps: [
@@ -1172,7 +1171,7 @@ export function generateSmcScenario(
   if (status === 'TAPPED_POI_REBOUND') {
     return {
       title: 'Primary SMC Scenario: Confirmed Rebound After Retesting Yesterday\'s Demand FVG/OB',
-      type: 'ELLIOTT_IMPULSE_EXPANSION',
+      type: 'IMPULSE_EXPANSION',
       probability: 'VERY HIGH',
       targetDescription: `Target TP1: Rp ${tp1.toLocaleString()} | Target TP2: Rp ${tp2.toLocaleString()}`,
       steps: [
@@ -1187,7 +1186,7 @@ export function generateSmcScenario(
   if (status === 'WAIT_FVG_CREATION') {
     return {
       title: 'Primary SMC Scenario: Impulse Breakout & New Momentum Expansion',
-      type: 'ELLIOTT_IMPULSE_EXPANSION',
+      type: 'IMPULSE_EXPANSION',
       probability: 'VERY HIGH',
       targetDescription: `Target TP1: Rp ${tp1.toLocaleString()} | Target TP2: Rp ${tp2.toLocaleString()}`,
       steps: [
@@ -1202,7 +1201,7 @@ export function generateSmcScenario(
   if (status === 'STRONG_BUY_POI') {
     return {
       title: 'Primary SMC Scenario: Rebound from Demand Zone / POI & Wave Continuation',
-      type: 'ELLIOTT_IMPULSE_EXPANSION',
+      type: 'IMPULSE_EXPANSION',
       probability: 'VERY HIGH',
       targetDescription: `Target TP1: Rp ${tp1.toLocaleString()} | Target TP2: Rp ${tp2.toLocaleString()}`,
       steps: [
@@ -1246,7 +1245,7 @@ export function generateSmcScenario(
 
   return {
     title: 'Primary SMC Scenario: Potential Reversal via Bullish Wave Formation',
-    type: 'ELLIOTT_WAVE_REVERSAL',
+    type: 'MOMENTUM_REVERSAL',
     probability: 'MEDIUM',
     targetDescription: `Key Reversal Level: Rp ${recentHighSwing?.price.toLocaleString() ?? entryMax.toLocaleString()} | Target TP: Rp ${tp1.toLocaleString()}`,
     steps: [

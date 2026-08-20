@@ -44,7 +44,6 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
   const [showOrderBlocks, setShowOrderBlocks] = useState(true);
   const [showFvg, setShowFvg] = useState(true);
   const [showGaps, setShowGaps] = useState(true);
-  const [showElliottWave, setShowElliottWave] = useState(true);
   const [showLiquidity, setShowLiquidity] = useState(true);
   const [showSupportResistance, setShowSupportResistance] = useState(true);
   const [showRiskRewardBox, setShowRiskRewardBox] = useState(true);
@@ -492,98 +491,6 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
       });
     }
 
-    // --- DRAW ELLIOTT WAVE STRUCTURE ---
-    if (showElliottWave && stock?.elliottWave) {
-      const ew = stock.elliottWave;
-      const points = ew.points || [];
-
-      // 1. Draw connecting polyline between confirmed Elliott Wave points
-      if (points.length >= 2) {
-        ctx.save();
-        ctx.strokeStyle = ew.phase === 'IMPULSE' ? '#38bdf8' : '#f59e0b'; // Sky blue for impulse, amber for corrective
-        ctx.lineWidth = 2.5;
-        ctx.setLineDash([4, 2]);
-        ctx.beginPath();
-        let firstPt = true;
-        for (const pt of points) {
-          const px = getX(pt.index);
-          const py = getY(pt.price);
-          if (firstPt) {
-            ctx.moveTo(px, py);
-            firstPt = false;
-          } else {
-            ctx.lineTo(px, py);
-          }
-        }
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.restore();
-      }
-
-      // 2. Draw Wave Number/Letter Badges at each swing point
-      for (const pt of points) {
-        if (pt.index >= startIndex && pt.index <= endIndex) {
-          const px = getX(pt.index);
-          const py = getY(pt.price);
-          const isPeak = pt.type === 'PEAK';
-          const badgeY = isPeak ? py - 18 : py + 18;
-
-          ctx.save();
-          // Circular badge
-          ctx.beginPath();
-          ctx.arc(px, badgeY, 11, 0, Math.PI * 2);
-          ctx.fillStyle = isPeak ? '#0284c7' : '#0d9488';
-          ctx.fill();
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
-
-          // Label text (e.g. "1", "2", "3", "A", "B", etc.)
-          ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 10px Inter, sans-serif';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(pt.label.replace(/[()]/g, ''), px, badgeY);
-
-          // Subtext with price
-          ctx.font = '8px Inter, sans-serif';
-          ctx.fillStyle = '#94a3b8';
-          ctx.fillText(`Rp ${Math.round(pt.price).toLocaleString()}`, px, isPeak ? badgeY - 14 : badgeY + 14);
-          ctx.restore();
-        }
-      }
-
-      // 3. Draw Invalidation Level Line
-      const invPrice = ew.invalidationLevel?.price;
-      const invRule = ew.invalidationLevel?.rule;
-      if (invPrice && invPrice > 0) {
-        const invY = getY(invPrice);
-        if (invY >= paddingTop && invY <= paddingTop + priceChartHeight) {
-          ctx.save();
-          ctx.strokeStyle = '#ef4444'; // Red line for invalidation
-          ctx.lineWidth = 1.5;
-          ctx.setLineDash([5, 4]);
-          ctx.beginPath();
-          ctx.moveTo(paddingLeft, invY);
-          ctx.lineTo(width - paddingRight, invY);
-          ctx.stroke();
-          ctx.setLineDash([]);
-
-          // Invalidation Label Badge
-          ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
-          const invText = `⚠️ Invalidation: Rp ${Math.round(invPrice).toLocaleString()} (${invRule || 'Rule breached'})`;
-          ctx.font = 'bold 9px Inter, sans-serif';
-          const textWidth = ctx.measureText(invText).width;
-          ctx.fillRect(paddingLeft + 8, invY - 14, textWidth + 12, 16);
-
-          ctx.fillStyle = '#ffffff';
-          ctx.textAlign = 'left';
-          ctx.fillText(invText, paddingLeft + 14, invY - 3);
-          ctx.restore();
-        }
-      }
-    }
-
     // --- DRAW LIQUIDITY SWEEPS ---
     if (showLiquidity && stock?.liquiditySweeps) {
       (stock.liquiditySweeps || []).forEach((sweep) => {
@@ -945,7 +852,6 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
     showOrderBlocks,
     showFvg,
     showGaps,
-    showElliottWave,
     showLiquidity,
     showSupportResistance,
     showRiskRewardBox,
@@ -1373,16 +1279,6 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
               title="Toggle Order Blocks / Point of Interest (POI)"
             >
               OrderBlock
-            </button>
-
-            <button
-              onClick={() => setShowElliottWave(!showElliottWave)}
-              className={`px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer ${
-                showElliottWave ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'text-slate-500'
-              }`}
-              title="Toggle Elliott Wave Structure & Projections"
-            >
-              Elliott Wave
             </button>
           </div>
 

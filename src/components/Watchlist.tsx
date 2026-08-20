@@ -340,19 +340,36 @@ export const Watchlist: React.FC<WatchlistProps> = ({
                   </span>
                 </div>
 
-                {/* Open Interactive Chart Button */}
-                <button
-                  onClick={() => {
-                    const displayTicker = stock.ticker === '^JKSE' || stock.ticker === 'JKSE' ? 'IHSG' : stock.ticker;
-                    window.open(`/analysis/${encodeURIComponent(displayTicker)}`, '_blank');
-                    onSelectStock(stock);
-                  }}
-                  className="w-full bg-slate-800 hover:bg-emerald-600 hover:text-slate-950 text-slate-200 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg group-hover:bg-emerald-500 group-hover:text-slate-950"
-                >
-                  <BarChart2 className="w-4 h-4" />
-                  <span>Analyze Stock</span>
-                  <ArrowUpRight className="w-4 h-4 opacity-70" />
-                </button>
+                {/* Action Buttons: Analyze Stock & View Inventory */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    onClick={() => {
+                      const displayTicker = stock.ticker === '^JKSE' || stock.ticker === 'JKSE' ? 'IHSG' : stock.ticker;
+                      try {
+                        window.history.pushState(null, '', `/analysis/${encodeURIComponent(displayTicker)}`);
+                      } catch (e) {}
+                      onSelectStock(stock);
+                    }}
+                    className="w-full bg-emerald-500/20 hover:bg-emerald-500 text-emerald-300 hover:text-slate-950 border border-emerald-500/30 font-bold py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                  >
+                    <BarChart2 className="w-3.5 h-3.5" />
+                    <span>Analyze Chart</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      const displayTicker = stock.ticker === '^JKSE' || stock.ticker === 'JKSE' ? 'IHSG' : stock.ticker;
+                      try {
+                        window.history.pushState(null, '', `/inventory/${encodeURIComponent(displayTicker)}`);
+                      } catch (e) {}
+                      onSelectStock(stock);
+                    }}
+                    className="w-full bg-cyan-500/20 hover:bg-cyan-500 text-cyan-300 hover:text-slate-950 border border-cyan-500/30 font-bold py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>Broker Flow</span>
+                  </button>
+                </div>
               </div>
             );
           })}

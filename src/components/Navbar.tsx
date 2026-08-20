@@ -20,8 +20,8 @@ import { StockData } from '../types';
 import { SmartMoneyIcon } from './SmartMoneyIcon';
 
 interface NavbarProps {
-  activeTab: 'landing' | 'chart' | 'screener' | 'guide' | 'calculator' | 'watchlist';
-  setActiveTab: (tab: 'landing' | 'chart' | 'screener' | 'guide' | 'calculator' | 'watchlist') => void;
+  activeTab: 'landing' | 'chart' | 'inventory' | 'screener' | 'guide' | 'calculator' | 'watchlist';
+  setActiveTab: (tab: 'landing' | 'chart' | 'inventory' | 'screener' | 'guide' | 'calculator' | 'watchlist') => void;
   stocks: StockData[];
   selectedStock: StockData | null;
   onSelectStock: (stock: StockData) => void;
@@ -67,7 +67,9 @@ export const Navbar: React.FC<NavbarProps> = ({
     }
 
     const cleanDisplayTicker = tickerToSearch === '^JKSE' ? 'IHSG' : tickerToSearch;
-    window.open(`/analysis/${encodeURIComponent(cleanDisplayTicker)}`, '_blank');
+    try {
+      window.history.pushState(null, '', `/analysis/${encodeURIComponent(cleanDisplayTicker)}`);
+    } catch (e) {}
 
     // Check if stock already exists in local list
     const existing = stocks.find(
@@ -252,7 +254,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                     key={s.symbol}
                     onClick={() => {
                       const displayTicker = s.ticker === '^JKSE' || s.ticker === 'JKSE' ? 'IHSG' : s.ticker;
-                      window.open(`/analysis/${encodeURIComponent(displayTicker)}`, '_blank');
+                      try {
+                        window.history.pushState(null, '', `/analysis/${encodeURIComponent(displayTicker)}`);
+                      } catch (e) {}
                       onSelectStock(s);
                       setActiveTab('chart');
                       setShowSearchDropdown(false);
@@ -308,6 +312,18 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <BarChart2 className="w-4 h-4" />
             <span>Interactive Chart</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('inventory')}
+            className={`px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+              activeTab === 'inventory'
+                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-lg shadow-cyan-500/10'
+                : 'text-slate-400 hover:text-cyan-300 hover:bg-slate-900'
+            }`}
+          >
+            <Layers className="w-4 h-4 text-cyan-400" />
+            <span>Inventory Chart</span>
           </button>
 
           <button
@@ -482,6 +498,25 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <div className="flex items-center gap-2.5">
                     <BarChart2 className="w-4 h-4 text-emerald-400" />
                     <span>Interactive SMC Chart</span>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-600" />
+                </motion.button>
+
+                <motion.button
+                  initial={{ y: 20, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  transition={{ delay: 0.22, type: 'spring', stiffness: 220, damping: 20 }}
+                  onClick={() => {
+                    setActiveTab('inventory');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`w-full p-3 rounded-xl text-left font-bold text-xs flex items-center justify-between cursor-pointer active:scale-[0.98] transition-all ${
+                    activeTab === 'inventory' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-lg shadow-cyan-500/10' : 'text-slate-300 hover:bg-slate-900'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Layers className="w-4 h-4 text-cyan-400" />
+                    <span>Broker Inventory Chart</span>
                   </div>
                   <ChevronRight className="w-4 h-4 text-slate-600" />
                 </motion.button>

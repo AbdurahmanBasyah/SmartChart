@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Loader2, Star } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { ParallaxHero } from './components/ParallaxHero';
@@ -7,6 +7,7 @@ import { RecommendationPanel } from './components/RecommendationPanel';
 import { StockScreener } from './components/StockScreener';
 import { PositionCalculator } from './components/PositionCalculator';
 import { Watchlist } from './components/Watchlist';
+import { InventoryChart } from './components/InventoryChart';
 import { SmcGuideModal } from './components/SmcGuideModal';
 import { SmcLoadingModal } from './components/SmcLoadingModal';
 import { SyncLoadingScreen } from './components/SyncLoadingScreen';
@@ -24,15 +25,35 @@ function isMatchingTicker(tickerA?: string, tickerB?: string): boolean {
 }
 
 export default function App() {
-  // Check initial path (e.g. /analysis/BRPT or /analysis/BBCA)
+  // Check initial path (e.g. /analysis/BRPT, /inventory/BBCA, /screener, etc.)
   const initialPathname = typeof window !== 'undefined' ? window.location.pathname : '/';
   const isDirectAnalysisRoute = initialPathname.startsWith('/analysis/');
+  const isDirectInventoryRoute = initialPathname.startsWith('/inventory/') || initialPathname === '/inventory';
+  const isDirectScreener = initialPathname === '/screener';
+  const isDirectWatchlist = initialPathname === '/watchlist';
+  const isDirectCalculator = initialPathname === '/calculator';
+
   const initialUrlTicker = isDirectAnalysisRoute
     ? decodeURIComponent(initialPathname.replace(/^\/analysis\//, '')).trim().toUpperCase()
+    : isDirectInventoryRoute
+    ? decodeURIComponent(initialPathname.replace(/^\/inventory\/?/, '')).trim().toUpperCase()
     : '';
 
-  const [activeTab, setActiveTab] = useState<'landing' | 'chart' | 'screener' | 'guide' | 'calculator' | 'watchlist'>(
-    isDirectAnalysisRoute ? 'chart' : 'landing'
+  const initialTab: 'landing' | 'chart' | 'inventory' | 'screener' | 'guide' | 'calculator' | 'watchlist' =
+    isDirectAnalysisRoute
+      ? 'chart'
+      : isDirectInventoryRoute
+      ? 'inventory'
+      : isDirectScreener
+      ? 'screener'
+      : isDirectWatchlist
+      ? 'watchlist'
+      : isDirectCalculator
+      ? 'calculator'
+      : 'landing';
+
+  const [activeTab, setActiveTab] = useState<'landing' | 'chart' | 'inventory' | 'screener' | 'guide' | 'calculator' | 'watchlist'>(
+    initialTab
   );
   const [stocks, setStocks] = useState<StockData[]>([]);
   const [selectedStock, setSelectedStock] = useState<StockData | null>(null);
@@ -42,13 +63,53 @@ export default function App() {
   const [isStockFetching, setIsStockFetching] = useState<boolean>(false);
   const [fetchingTicker, setFetchingTicker] = useState<string>('');
 
-  // Initial Sync HUD States (skip modal if directly opening an analysis URL)
-  const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(!isDirectAnalysisRoute);
+  // Initial Sync HUD States (skip modal if directly opening an analysis or inventory URL)
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(
+    !isDirectAnalysisRoute && !isDirectInventoryRoute && !isDirectScreener && !isDirectWatchlist
+  );
   const [syncProgress, setSyncProgress] = useState<number>(5);
   const [syncedTickers, setSyncedTickers] = useState<string[]>([]);
   const [currentProcessingTicker, setCurrentProcessingTicker] = useState<string>('BRPT');
   const [isSyncComplete, setIsSyncComplete] = useState<boolean>(false);
   const [totalTargetCount, setTotalTargetCount] = useState<number>(85);
+
+  // Synchronize browser history and popstate for back/forward navigation
+  const stocksRef = useRef<StockData[]>(stocks);
+  useEffect(() => {
+    stocksRef.current = stocks;
+  }, [stocks]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const path = window.location.pathname;
+      if (path.startsWith('/analysis/')) {
+        const t = decodeURIComponent(path.replace(/^\/analysis\//, '')).trim().toUpperCase();
+        setActiveTab('chart');
+        if (t) {
+          const match = stocksRef.current.find((s) => isMatchingTicker(s.ticker, t));
+          if (match) setSelectedStock(match);
+        }
+      } else if (path.startsWith('/inventory/') || path === '/inventory') {
+        const t = decodeURIComponent(path.replace(/^\/inventory\/?/, '')).trim().toUpperCase();
+        setActiveTab('inventory');
+        if (t) {
+          const match = stocksRef.current.find((s) => isMatchingTicker(s.ticker, t));
+          if (match) setSelectedStock(match);
+        }
+      } else if (path === '/screener') {
+        setActiveTab('screener');
+      } else if (path === '/watchlist') {
+        setActiveTab('watchlist');
+      } else if (path === '/calculator') {
+        setActiveTab('calculator');
+      } else if (path === '/') {
+        setActiveTab('landing');
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   // Watchlist State persisted in localStorage
   const [watchlist, setWatchlist] = useState<string[]>(() => {
@@ -461,11 +522,37 @@ export default function App() {
             setIsGuideOpen(true);
           } else {
             setActiveTab(tab);
+            try {
+              const currentT = selectedStock?.ticker ? (selectedStock.ticker === '^JKSE' ? 'IHSG' : selectedStock.ticker) : 'BBCA';
+              if (tab === 'chart') {
+                window.history.pushState(null, '', `/analysis/${encodeURIComponent(currentT)}`);
+              } else if (tab === 'inventory') {
+                window.history.pushState(null, '', `/inventory/${encodeURIComponent(currentT)}`);
+              } else if (tab === 'screener') {
+                window.history.pushState(null, '', '/screener');
+              } else if (tab === 'watchlist') {
+                window.history.pushState(null, '', '/watchlist');
+              } else if (tab === 'calculator') {
+                window.history.pushState(null, '', '/calculator');
+              } else if (tab === 'landing') {
+                window.history.pushState(null, '', '/');
+              }
+            } catch (e) {}
           }
         }}
         stocks={stocks}
         selectedStock={selectedStock}
-        onSelectStock={handleSelectStock}
+        onSelectStock={(s) => {
+          handleSelectStock(s);
+          try {
+            const displayT = s.ticker === '^JKSE' ? 'IHSG' : s.ticker;
+            if (activeTab === 'inventory') {
+              window.history.pushState(null, '', `/inventory/${encodeURIComponent(displayT)}`);
+            } else {
+              window.history.pushState(null, '', `/analysis/${encodeURIComponent(displayT)}`);
+            }
+          } catch (e) {}
+        }}
         onFetchNewStock={handleFetchNewStock}
         watchlistCount={watchlist.length}
       />
@@ -481,6 +568,28 @@ export default function App() {
               setStocks((prev) =>
                 prev.map((s) => (isMatchingTicker(s.ticker, liveData.ticker) ? liveData : s))
               );
+            }}
+          />
+        )}
+
+        {activeTab === 'inventory' && (
+          <InventoryChart
+            stocks={stocks}
+            selectedStock={selectedStock}
+            onSelectStock={(s) => {
+              setSelectedStock(s);
+              handleSelectStock(s);
+              try {
+                const displayT = s.ticker === '^JKSE' ? 'IHSG' : s.ticker;
+                window.history.pushState(null, '', `/inventory/${encodeURIComponent(displayT)}`);
+              } catch (e) {}
+            }}
+            onFetchNewStock={handleFetchNewStock}
+            onNavigateToChart={(t) => {
+              handleStartChart(t);
+              try {
+                window.history.pushState(null, '', `/analysis/${encodeURIComponent(t)}`);
+              } catch (e) {}
             }}
           />
         )}

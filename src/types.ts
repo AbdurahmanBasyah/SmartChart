@@ -16,44 +16,62 @@ export interface SwingPoint {
   type: SwingType;
 }
 
-export interface ElliottWavePoint {
-  wave: '0' | '1' | '2' | '3' | '4' | '5' | 'A' | 'B' | 'C';
-  label: string; // e.g. "(1)", "(2)", "(3)", "(4)", "(5)", "(A)", "(B)", "(C)"
-  index: number;
-  time: string;
-  price: number;
-  type: 'PEAK' | 'TROUGH' | 'ORIGIN';
+export interface BrokerDailyPoint {
+  date: string; // YYYY-MM-DD
+  buyVol: number; // in lots
+  sellVol: number; // in lots
+  netVol: number; // buyVol - sellVol in lots
+  buyVal: number; // in IDR
+  sellVal: number; // in IDR
+  netVal: number; // buyVal - sellVal in IDR
+  cumNetVol: number; // Running cumulative net lots from range start
+  cumNetVal: number; // Running cumulative net IDR from range start
+  avgBuyPrice: number;
+  avgSellPrice: number;
 }
 
-export interface ElliottWaveRule {
-  rule: string;
-  passed: boolean;
-  note: string;
+export interface BrokerInventoryItem {
+  brokerCode: string; // 2-letter IDX broker code (e.g. "YP", "CC", "BK", "AK", "XC", "XL")
+  brokerName: string; // Full broker name
+  type: 'FOREIGN' | 'DOMESTIC_INSTITUTION' | 'RETAIL';
+  totalBuyVol: number; // lots
+  totalSellVol: number; // lots
+  totalBuyVal: number; // IDR
+  totalSellVal: number; // IDR
+  netVol: number; // totalBuyVol - totalSellVol (in lots)
+  netVal: number; // totalBuyVal - totalSellVal (in IDR)
+  avgBuyPrice: number;
+  avgSellPrice: number;
+  cleanTendency: 'CLEAN_ACCUM' | 'CLEAN_DIST' | 'MODERATE_ACCUM' | 'MODERATE_DIST' | 'NEUTRAL';
+  cleanRatio: number; // Buy or Sell purity percentage (0 - 100%)
+  churnRatio: number; // Turnover vs net volume ratio
+  category: 'NET_BUY' | 'NET_SELL';
+  color: string; // Distinct hex color for chart overlay
+  visible: boolean; // Chart overlay visibility toggle
+  rank: number;
+  dailyPoints: BrokerDailyPoint[];
 }
 
-export interface ElliottWaveTarget {
-  targetPrice: number;
-  percentGain: number;
-  ratioLabel: string;
-  description: string;
-}
-
-export interface ElliottWaveAnalysis {
-  currentWave: 'WAVE_1' | 'WAVE_2' | 'WAVE_3' | 'WAVE_4' | 'WAVE_5' | 'WAVE_A' | 'WAVE_B' | 'WAVE_C';
-  waveLabel: string; // e.g. "Wave (3) Impulse Expansion"
-  phase: 'IMPULSE' | 'CORRECTION';
-  probability: 'VERY HIGH' | 'HIGH' | 'MEDIUM';
-  points: ElliottWavePoint[];
-  invalidationLevel: {
-    price: number;
-    percentFromCurrent: number;
-    rule: string;
-    description: string;
+export interface BrokerInventorySummary {
+  ticker: string;
+  stockName: string;
+  currentPrice: number;
+  startDate: string;
+  endDate: string;
+  totalTradingDays: number;
+  candles: Candle[];
+  topNetBuyers: BrokerInventoryItem[];
+  topNetSellers: BrokerInventoryItem[];
+  allBrokers: BrokerInventoryItem[];
+  autoSelectedBrokerCodes: string[]; // Default top buyers & sellers
+  stats: {
+    totalVolumeLots: number;
+    totalValueIdr: number;
+    foreignNetVol: number;
+    foreignNetVal: number;
+    cleanAccumBrokerCount: number;
+    cleanDistBrokerCount: number;
   };
-  projectedTargets: ElliottWaveTarget[];
-  rules: ElliottWaveRule[];
-  summary: string;
-  momentumDivergence?: boolean;
 }
 
 export interface FvgZone {
@@ -148,7 +166,7 @@ export interface TradeRecommendation {
 
 export interface SmcScenario {
   title: string;
-  type: 'ELLIOTT_IMPULSE_EXPANSION' | 'PULLBACK_RETEST' | 'ELLIOTT_WAVE_REVERSAL' | 'SIDEWAYS_ACCUMULATION' | 'BREAKDOWN_RISK';
+  type: 'IMPULSE_EXPANSION' | 'PULLBACK_RETEST' | 'MOMENTUM_REVERSAL' | 'SIDEWAYS_ACCUMULATION' | 'BREAKDOWN_RISK';
   probability: 'VERY HIGH' | 'HIGH' | 'MEDIUM';
   targetDescription: string;
   steps: string[];
@@ -162,7 +180,6 @@ export interface StockData {
   conglomerate?: string; // e.g., "Prajogo Pangestu", "Grup Bakrie", "Happy Hapsoro", "Haji Isam"
   candles: Candle[];
   swings: SwingPoint[];
-  elliottWave?: ElliottWaveAnalysis;
   fvgs: FvgZone[];
   orderBlocks: OrderBlock[];
   priceGaps?: PriceGap[];
