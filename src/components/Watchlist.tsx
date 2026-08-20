@@ -342,11 +342,15 @@ export const Watchlist: React.FC<WatchlistProps> = ({
 
                 {/* Open Interactive Chart Button */}
                 <button
-                  onClick={() => onSelectStock(stock)}
+                  onClick={() => {
+                    const displayTicker = stock.ticker === '^JKSE' || stock.ticker === 'JKSE' ? 'IHSG' : stock.ticker;
+                    window.open(`/analysis/${encodeURIComponent(displayTicker)}`, '_blank');
+                    onSelectStock(stock);
+                  }}
                   className="w-full bg-slate-800 hover:bg-emerald-600 hover:text-slate-950 text-slate-200 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg group-hover:bg-emerald-500 group-hover:text-slate-950"
                 >
                   <BarChart2 className="w-4 h-4" />
-                  <span>Open Interactive Chart</span>
+                  <span>Analyze Stock</span>
                   <ArrowUpRight className="w-4 h-4 opacity-70" />
                 </button>
               </div>

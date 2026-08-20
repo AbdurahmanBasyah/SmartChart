@@ -24,7 +24,16 @@ function isMatchingTicker(tickerA?: string, tickerB?: string): boolean {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'landing' | 'chart' | 'screener' | 'guide' | 'calculator' | 'watchlist'>('landing');
+  // Check initial path (e.g. /analysis/BRPT or /analysis/BBCA)
+  const initialPathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+  const isDirectAnalysisRoute = initialPathname.startsWith('/analysis/');
+  const initialUrlTicker = isDirectAnalysisRoute
+    ? decodeURIComponent(initialPathname.replace(/^\/analysis\//, '')).trim().toUpperCase()
+    : '';
+
+  const [activeTab, setActiveTab] = useState<'landing' | 'chart' | 'screener' | 'guide' | 'calculator' | 'watchlist'>(
+    isDirectAnalysisRoute ? 'chart' : 'landing'
+  );
   const [stocks, setStocks] = useState<StockData[]>([]);
   const [selectedStock, setSelectedStock] = useState<StockData | null>(null);
   const [timeframe, setTimeframe] = useState<string>('1D');
@@ -33,8 +42,8 @@ export default function App() {
   const [isStockFetching, setIsStockFetching] = useState<boolean>(false);
   const [fetchingTicker, setFetchingTicker] = useState<string>('');
 
-  // Initial Sync HUD States
-  const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(true);
+  // Initial Sync HUD States (skip modal if directly opening an analysis URL)
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(!isDirectAnalysisRoute);
   const [syncProgress, setSyncProgress] = useState<number>(5);
   const [syncedTickers, setSyncedTickers] = useState<string[]>([]);
   const [currentProcessingTicker, setCurrentProcessingTicker] = useState<string>('BRPT');
@@ -110,9 +119,43 @@ export default function App() {
 
       if (isMounted) {
         setStocks(initialList);
-        const brpt = initialList.find((s) => s.ticker === 'BRPT') || initialList[0];
-        setSelectedStock(brpt);
+
+        // If URL specified a ticker (e.g. /analysis/BBCA), find it or fetch it
+        if (initialUrlTicker) {
+          const matchedUrlStock = initialList.find((s) => isMatchingTicker(s.ticker, initialUrlTicker));
+          if (matchedUrlStock) {
+            setSelectedStock(matchedUrlStock);
+          } else {
+            // Will fetch below in syncRealData or direct fetch
+            const temp = initialList.find((s) => s.ticker === 'BRPT') || initialList[0];
+            setSelectedStock(temp);
+          }
+        } else {
+          const brpt = initialList.find((s) => s.ticker === 'BRPT') || initialList[0];
+          setSelectedStock(brpt);
+        }
         setLoading(false);
+      }
+
+      // If opening an analysis route for a stock not in default set, fetch it immediately
+      if (initialUrlTicker) {
+        (async () => {
+          try {
+            const { fetchYahooStockData } = await import('./services/yahooFinance');
+            const liveDirect = await fetchYahooStockData(initialUrlTicker);
+            if (isMounted && liveDirect && liveDirect.candles && liveDirect.candles.length > 0) {
+              setStocks((prev) => {
+                const exists = prev.some((s) => isMatchingTicker(s.ticker, liveDirect.ticker));
+                return exists
+                  ? prev.map((s) => (isMatchingTicker(s.ticker, liveDirect.ticker) ? liveDirect : s))
+                  : [liveDirect, ...prev];
+              });
+              setSelectedStock(liveDirect);
+            }
+          } catch (e) {
+            // fallback
+          }
+        })();
       }
 
       // Immediately fetch real live market data for all requested conglomerates, sectors, and watchlist items

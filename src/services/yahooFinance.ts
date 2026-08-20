@@ -146,7 +146,8 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
         const c = closes[i];
         const v = volumes[i];
 
-        if (o != null && h != null && l != null && c != null && c > 0) {
+        // Filter out non-trading days / holidays (volume <= 0 or zero prices)
+        if (o != null && h != null && l != null && c != null && c > 0 && v != null && v > 0) {
           const dateStr = formatJakartaDate(timestamps[i]);
           if (dateStr > todayDateStr) continue;
 
@@ -158,7 +159,7 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
               high: roundPrice(Math.max(h, o, c)),
               low: roundPrice(Math.min(l, o, c)),
               close: roundPrice(c),
-              volume: Math.round(v || 500000),
+              volume: Math.round(v),
             });
           }
         }
@@ -172,26 +173,29 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
         const metaDateStr = formatJakartaDate(latestTime);
         if (metaDateStr <= todayDateStr) {
           const lastCandle = candles[candles.length - 1];
+          const vol = meta.regularMarketVolume || 0;
 
-          if (!lastCandle || lastCandle.time < metaDateStr) {
-            const openPrice = meta.regularMarketDayOpen || lastCandle?.close || latestPrice;
-            const highPrice = meta.regularMarketDayHigh || Math.max(openPrice, latestPrice);
-            const lowPrice = meta.regularMarketDayLow || Math.min(openPrice, latestPrice);
-            const vol = meta.regularMarketVolume || 1000000;
+          // Only include latest candle if it has valid trading volume or exists
+          if (vol > 0 || isIhsg) {
+            if (!lastCandle || lastCandle.time < metaDateStr) {
+              const openPrice = meta.regularMarketDayOpen || lastCandle?.close || latestPrice;
+              const highPrice = meta.regularMarketDayHigh || Math.max(openPrice, latestPrice);
+              const lowPrice = meta.regularMarketDayLow || Math.min(openPrice, latestPrice);
 
-            candles.push({
-              time: metaDateStr,
-              open: roundPrice(openPrice),
-              high: roundPrice(highPrice),
-              low: roundPrice(lowPrice),
-              close: roundPrice(latestPrice),
-              volume: Math.round(vol),
-            });
-          } else if (lastCandle.time === metaDateStr) {
-            lastCandle.close = roundPrice(latestPrice);
-            if (meta.regularMarketDayHigh) lastCandle.high = roundPrice(meta.regularMarketDayHigh);
-            if (meta.regularMarketDayLow) lastCandle.low = roundPrice(meta.regularMarketDayLow);
-            if (meta.regularMarketVolume) lastCandle.volume = Math.round(meta.regularMarketVolume);
+              candles.push({
+                time: metaDateStr,
+                open: roundPrice(openPrice),
+                high: roundPrice(highPrice),
+                low: roundPrice(lowPrice),
+                close: roundPrice(latestPrice),
+                volume: Math.round(vol > 0 ? vol : (lastCandle?.volume || 500000)),
+              });
+            } else if (lastCandle.time === metaDateStr) {
+              lastCandle.close = roundPrice(latestPrice);
+              if (meta.regularMarketDayHigh) lastCandle.high = roundPrice(meta.regularMarketDayHigh);
+              if (meta.regularMarketDayLow) lastCandle.low = roundPrice(meta.regularMarketDayLow);
+              if (meta.regularMarketVolume && meta.regularMarketVolume > 0) lastCandle.volume = Math.round(meta.regularMarketVolume);
+            }
           }
         }
       }

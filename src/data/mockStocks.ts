@@ -4,7 +4,6 @@ import {
   calculateVolumeMA,
   calculateVWAP,
   detectSwings,
-  detectBosChoch,
   detectFVGs,
   detectPriceGaps,
   detectOrderBlocks,
@@ -12,6 +11,7 @@ import {
   detectSupportResistance,
   generateRecommendation,
 } from "../utils/smcEngine";
+import { analyzeElliottWave, filterTradingDays } from "../utils/elliottWaveEngine";
 
 // Seeded pseudo random generator for reproducible chart candles
 function seededRandom(seed: number) {
@@ -158,12 +158,12 @@ export function buildStockData(
 
   const isIhsg = symbol.includes('JKSE') || ticker === 'IHSG';
   const swings = detectSwings(candles);
-  const bosChochLines = detectBosChoch(candles, swings);
   const fvgs = detectFVGs(candles, isIhsg);
   const priceGaps = detectPriceGaps(candles);
-  const orderBlocks = detectOrderBlocks(candles, swings, bosChochLines, fvgs, volumeMa20);
+  const orderBlocks = detectOrderBlocks(candles, swings, fvgs, volumeMa20);
   const liquiditySweeps = detectLiquiditySweeps(candles, swings);
   const supportResistance = detectSupportResistance(candles);
+  const elliottWave = analyzeElliottWave(candles, swings, currentPrice, isIhsg);
 
   const recommendation = generateRecommendation(
     symbol,
@@ -185,7 +185,7 @@ export function buildStockData(
     conglomerate,
     candles,
     swings,
-    bosChochLines,
+    elliottWave,
     fvgs,
     orderBlocks,
     priceGaps,

@@ -1,7 +1,6 @@
 import {
   Candle,
   SwingPoint,
-  BosChochLine,
   FvgZone,
   OrderBlock,
   PriceGap,
@@ -13,6 +12,7 @@ import {
   SmcScenario,
 } from '../types';
 import { roundToIdxTick, addIdxTicks, getIdxTickSize, countIdxTicksBetween } from './idxTickRules';
+import { filterTradingDays } from './elliottWaveEngine';
 
 /**
  * Calculates Moving Average
@@ -129,181 +129,7 @@ export function detectSwings(candles: Candle[], lookback: number = 3): SwingPoin
   return swings;
 }
 
-/**
- * Detects BOS (Break of Structure) & CHoCH (Change of Character) according to strict SMC rules:
- * 1. Body Close Rule: Must close past level (candle.close). Wick sweeps are ignored.
- * 2. Bullish BOS: Candle body closes above previous valid HH. Requires prior HL pullback pivot.
- * 3. Bearish BOS: Candle body closes below previous valid LL. Requires prior LH pullback pivot. No duplicate stacking on consecutive falling red candles!
- * 4. Bearish CHoCH: Price body closes below the LAST VALID Higher Low (HL) that produced the recent Higher High (HH).
- * 5. Bullish CHoCH: Price body closes above the LAST VALID Lower High (LH) that produced the recent Lower Low (LL).
- */
-export function detectBosChoch(candles: Candle[], swings: SwingPoint[]): BosChochLine[] {
-  const lines: BosChochLine[] = [];
-  if (!candles || candles.length < 2 || !swings || swings.length === 0) return lines;
 
-  const sortedSwings = [...swings].sort((a, b) => a.index - b.index);
-
-  // Active regime tracking
-  let marketTrend: 'BULLISH' | 'BEARISH' = 'BULLISH';
-
-  // Last valid swing references
-  let activeHH: SwingPoint | null = null;
-  let activeHL: SwingPoint | null = null;
-  let activeLL: SwingPoint | null = null;
-  let activeLH: SwingPoint | null = null;
-
-  // Track break levels to avoid duplicate BOS lines on consecutive candles without new pullbacks
-  let lastEmittedBullishBosPrice: number | null = null;
-  let lastEmittedBearishBosPrice: number | null = null;
-
-  for (let c = 0; c < candles.length; c++) {
-    const candle = candles[c];
-
-    // Swings formed at or before index c
-    const swingsUpToC = sortedSwings.filter((s) => s.index <= c);
-
-    // Update swing anchors
-    const currentHH = swingsUpToC.filter((s) => s.type === 'HH').pop() || null;
-    const currentHL = swingsUpToC.filter((s) => s.type === 'HL').pop() || null;
-    const currentLL = swingsUpToC.filter((s) => s.type === 'LL').pop() || null;
-    const currentLH = swingsUpToC.filter((s) => s.type === 'LH').pop() || null;
-
-    if (currentHH && (!activeHH || currentHH.index > activeHH.index)) activeHH = currentHH;
-    if (currentHL && (!activeHL || currentHL.index > activeHL.index)) activeHL = currentHL;
-    if (currentLL && (!activeLL || currentLL.index > activeLL.index)) activeLL = currentLL;
-    if (currentLH && (!activeLH || currentLH.index > activeLH.index)) activeLH = currentLH;
-
-    // --- 1. BULLISH SCENARIOS (Bullish BOS or Bearish CHoCH) ---
-
-    // A. BULLISH BOS: Body close above activeHH (Mirror of Bearish BOS)
-    if (activeHH && candle.close > activeHH.price) {
-      // Must have a valid HL pullback anchor between previous swing and current breakout
-      const hasPullbackHl = activeHL != null && activeHL.index < c && activeHL.index > activeHH.index;
-      const isNotDuplicate = lastEmittedBullishBosPrice !== activeHH.price;
-
-      // Bullish BOS validity rule: LL/HL of current BOS must NOT be higher than previous LL in previous BOS
-      const lastBullishBosLine = lines.filter((l) => l.type === 'BOS' && l.direction === 'bullish').pop();
-      let hlIsValidForBullBos = true;
-      if (lastBullishBosLine && activeLL) {
-        if (activeLL.price > lastBullishBosLine.price) {
-          hlIsValidForBullBos = false;
-        }
-      }
-
-      if (isNotDuplicate && hlIsValidForBullBos && hasPullbackHl) {
-        lines.push({
-          id: `BOS-bull-${activeHH.index}-${c}`,
-          type: 'BOS',
-          direction: 'bullish',
-          startIndex: activeHH.index,
-          endIndex: c,
-          price: activeHH.price,
-          label: 'BOS',
-          time: candle.time,
-        });
-
-        marketTrend = 'BULLISH';
-        lastEmittedBullishBosPrice = activeHH.price;
-        // Reset activeHH until a higher HH swing forms
-        activeHH = null;
-      }
-    }
-
-    // B. BEARISH CHoCH: Triggered strictly on trend reversal (Bullish -> Bearish)
-    // Price body closes BELOW the LAST VALID HL formed during Bullish trend
-    if (marketTrend === 'BULLISH' && activeHL && candle.close < activeHL.price) {
-      lines.push({
-        id: `CHoCH-bear-${activeHL.index}-${c}`,
-        type: 'CHoCH',
-        direction: 'bearish',
-        startIndex: activeHL.index,
-        endIndex: c,
-        price: activeHL.price,
-        label: 'CHoCH',
-        time: candle.time,
-      });
-
-      marketTrend = 'BEARISH';
-      activeHL = null; // Reset last HL
-      lastEmittedBearishBosPrice = null;
-    }
-
-    // --- 2. BEARISH SCENARIOS (Bearish BOS or Bullish CHoCH) ---
-
-    // C. BEARISH BOS: Body close below activeLL
-    if (activeLL && candle.close < activeLL.price) {
-      // Must have a valid LH pullback anchor between previous swing and current breakdown
-      const hasPullbackLh = activeLH != null && activeLH.index < c && activeLH.index > activeLL.index;
-      const isNotDuplicate = lastEmittedBearishBosPrice !== activeLL.price;
-
-      // Bearish BOS validity rule: HH/LH of current BOS must NOT be lower than previous HH in previous BOS
-      const lastBearishBosLine = lines.filter((l) => l.type === 'BOS' && l.direction === 'bearish').pop();
-      let hhIsValidForBearBos = true;
-      if (lastBearishBosLine && activeHH) {
-        if (activeHH.price < lastBearishBosLine.price) {
-          hhIsValidForBearBos = false;
-        }
-      }
-
-      // Only emit if there was a proper LH pullback, preventing duplicate stacking on consecutive red candles!
-      if (isNotDuplicate && hhIsValidForBearBos && hasPullbackLh) {
-        lines.push({
-          id: `BOS-bear-${activeLL.index}-${c}`,
-          type: 'BOS',
-          direction: 'bearish',
-          startIndex: activeLL.index,
-          endIndex: c,
-          price: activeLL.price,
-          label: 'BOS',
-          time: candle.time,
-        });
-
-        marketTrend = 'BEARISH';
-        lastEmittedBearishBosPrice = activeLL.price;
-        // Reset activeLL until a new LL swing forms
-        activeLL = null;
-      }
-    }
-
-    // D. BULLISH CHoCH: Price body closes ABOVE the LAST VALID LH in a Bearish regime
-    if (marketTrend === 'BEARISH' && activeLH && candle.close > activeLH.price) {
-      lines.push({
-        id: `CHoCH-bull-${activeLH.index}-${c}`,
-        type: 'CHoCH',
-        direction: 'bullish',
-        startIndex: activeLH.index,
-        endIndex: c,
-        price: activeLH.price,
-        label: 'CHoCH',
-        time: candle.time,
-      });
-
-      marketTrend = 'BULLISH';
-      activeLH = null; // Last LH broken
-      lastEmittedBullishBosPrice = null;
-    }
-  }
-
-  // Deduplicate and filter out overlapping CHoCH & BOS lines that stack on top of each other
-  const cleanLines: BosChochLine[] = [];
-  for (const line of lines) {
-    const isDuplicateOrOverlapping = cleanLines.some((existing) => {
-      const priceDiffRatio = Math.abs(existing.price - line.price) / Math.max(1, line.price);
-      if (existing.type === line.type) {
-        // Same structure type (CHoCH vs CHoCH or BOS vs BOS): price within 1.5% or indices close together
-        return priceDiffRatio < 0.015 || Math.abs(existing.endIndex - line.endIndex) < 6;
-      }
-      // Different structure types at almost exact price level (< 0.8%)
-      return priceDiffRatio < 0.008;
-    });
-
-    if (!isDuplicateOrOverlapping) {
-      cleanLines.push(line);
-    }
-  }
-
-  return cleanLines;
-}
 
 /**
  * Detects Fair Value Gaps (FVG)
@@ -539,7 +365,6 @@ export function isValidBearishObCandle(c: Candle): boolean {
 export function detectOrderBlocks(
   candles: Candle[],
   swings: SwingPoint[],
-  bosLines: BosChochLine[],
   fvgs: FvgZone[],
   volumeMa: (number | null)[]
 ): OrderBlock[] {
@@ -549,125 +374,100 @@ export function detectOrderBlocks(
   const usedBullIndices = new Set<number>();
   const usedBearIndices = new Set<number>();
 
-  // 1. Bullish Order Blocks (Demand OB) triggered by Bullish BOS
-  const bullishBosEvents = bosLines.filter((l) => l.direction === 'bullish');
-  for (const bos of bullishBosEvents) {
-    const breakIndex = bos.endIndex;
+  // 1. Bullish Order Blocks (Demand OB): Origin base candle before an upward displacement/rally
+  for (let i = 1; i < candles.length - 2; i++) {
+    const c = candles[i];
+    if (!isValidBullishObCandle(c)) continue;
 
-    let targetK = -1;
-    let minLow = Infinity;
+    // Check if subsequent 1-4 candles produce strong expansion or FVG
+    const hasAssociatedFvg = fvgs.some(
+      (f) => f.type === 'bullish' && f.startIndex >= i && f.startIndex <= i + 4
+    );
+    const hasImpulsiveRally = candles[i + 1] && candles[i + 2] && (
+      candles[i + 2].close > c.high * 1.02 || (candles[i + 1].close > c.close && candles[i + 2].close > candles[i + 1].close)
+    );
 
-    for (let k = breakIndex - 1; k >= Math.max(0, breakIndex - 8); k--) {
-      const c = candles[k];
-      if (isValidBullishObCandle(c)) {
-        if (c.low < minLow) {
-          minLow = c.low;
-          targetK = k;
+    if ((hasAssociatedFvg || hasImpulsiveRally) && !usedBullIndices.has(i)) {
+      usedBullIndices.add(i);
+      const obTop = Math.round(Math.max(c.open, c.close));
+      const obBottom = Math.round(c.low);
+
+      let mitigated = false;
+      let endIndex = candles.length - 1;
+
+      // Invalidation: Price CLOSES below c.low
+      for (let j = i + 1; j < candles.length; j++) {
+        if (candles[j].close < c.low) {
+          mitigated = true;
+          endIndex = j;
+          break;
         }
       }
-    }
 
-    if (targetK !== -1 && !usedBullIndices.has(targetK)) {
-      const c = candles[targetK];
-      const hasAssociatedFvg = fvgs.some(
-        (f) => f.type === 'bullish' && f.startIndex >= targetK && f.startIndex <= targetK + 5
-      );
+      const vMa = volumeMa[i];
+      const volumeSpike = vMa !== null && c.volume > vMa * 1.3;
 
-      if (hasAssociatedFvg || breakIndex - targetK <= 5) {
-        usedBullIndices.add(targetK);
-        const obTop = Math.round(Math.max(c.open, c.close));
-        const obBottom = Math.round(c.low);
-
-        let mitigated = false;
-        let endIndex = candles.length - 1;
-
-        // Invalidation Rule: Price CLOSES below c.low
-        for (let j = targetK + 1; j < candles.length; j++) {
-          if (candles[j].close < c.low) {
-            mitigated = true;
-            endIndex = j;
-            break;
-          }
-        }
-
-        const vMa = volumeMa[targetK];
-        const volumeSpike = vMa !== null && c.volume > vMa * 1.3;
-
-        orderBlocks.push({
-          id: `ob-bull-${targetK}`,
-          type: 'bullish',
-          top: obTop,
-          bottom: obBottom,
-          startIndex: targetK,
-          endIndex: mitigated ? endIndex : candles.length - 1,
-          mitigated,
-          time: c.time,
-          volumeSpike,
-        });
-      }
+      orderBlocks.push({
+        id: `ob-bull-${i}`,
+        type: 'bullish',
+        top: obTop,
+        bottom: obBottom,
+        startIndex: i,
+        endIndex: mitigated ? endIndex : candles.length - 1,
+        mitigated,
+        time: c.time,
+        volumeSpike,
+      });
     }
   }
 
-  // 2. Bearish Order Blocks (Supply OB) triggered by Bearish BOS
-  const bearishBosEvents = bosLines.filter((l) => l.direction === 'bearish');
-  for (const bos of bearishBosEvents) {
-    const breakIndex = bos.endIndex;
+  // 2. Bearish Order Blocks (Supply OB): Origin base candle before a downward displacement
+  for (let i = 1; i < candles.length - 2; i++) {
+    const c = candles[i];
+    if (!isValidBearishObCandle(c)) continue;
 
-    let targetK = -1;
-    let maxHigh = -Infinity;
+    const hasAssociatedFvg = fvgs.some(
+      (f) => f.type === 'bearish' && f.startIndex >= i && f.startIndex <= i + 4
+    );
+    const hasImpulsiveDrop = candles[i + 1] && candles[i + 2] && (
+      candles[i + 2].close < c.low * 0.98 || (candles[i + 1].close < c.close && candles[i + 2].close < candles[i + 1].close)
+    );
 
-    for (let k = breakIndex - 1; k >= Math.max(0, breakIndex - 8); k--) {
-      const c = candles[k];
-      if (isValidBearishObCandle(c)) {
-        if (c.high > maxHigh) {
-          maxHigh = c.high;
-          targetK = k;
+    if ((hasAssociatedFvg || hasImpulsiveDrop) && !usedBearIndices.has(i)) {
+      usedBearIndices.add(i);
+      const obTop = Math.round(c.high);
+      const obBottom = Math.round(Math.min(c.open, c.close));
+
+      let mitigated = false;
+      let endIndex = candles.length - 1;
+
+      // Invalidation: Price CLOSES above c.high
+      for (let j = i + 1; j < candles.length; j++) {
+        if (candles[j].close > c.high) {
+          mitigated = true;
+          endIndex = j;
+          break;
         }
       }
-    }
 
-    if (targetK !== -1 && !usedBearIndices.has(targetK)) {
-      const c = candles[targetK];
-      const hasAssociatedFvg = fvgs.some(
-        (f) => f.type === 'bearish' && f.startIndex >= targetK && f.startIndex <= targetK + 5
-      );
+      const vMa = volumeMa[i];
+      const volumeSpike = vMa !== null && c.volume > vMa * 1.3;
 
-      if (hasAssociatedFvg || breakIndex - targetK <= 5) {
-        usedBearIndices.add(targetK);
-        const obTop = Math.round(c.high);
-        const obBottom = Math.round(Math.min(c.open, c.close));
-
-        let mitigated = false;
-        let endIndex = candles.length - 1;
-
-        // Invalidation Rule: Price CLOSES above c.high
-        for (let j = targetK + 1; j < candles.length; j++) {
-          if (candles[j].close > c.high) {
-            mitigated = true;
-            endIndex = j;
-            break;
-          }
-        }
-
-        const vMa = volumeMa[targetK];
-        const volumeSpike = vMa !== null && c.volume > vMa * 1.3;
-
-        orderBlocks.push({
-          id: `ob-bear-${targetK}`,
-          type: 'bearish',
-          top: obTop,
-          bottom: obBottom,
-          startIndex: targetK,
-          endIndex: mitigated ? endIndex : candles.length - 1,
-          mitigated,
-          time: c.time,
-          volumeSpike,
-        });
-      }
+      orderBlocks.push({
+        id: `ob-bear-${i}`,
+        type: 'bearish',
+        top: obTop,
+        bottom: obBottom,
+        startIndex: i,
+        endIndex: mitigated ? endIndex : candles.length - 1,
+        mitigated,
+        time: c.time,
+        volumeSpike,
+      });
     }
   }
 
-  // 3. Fallback for major swing points if BOS was not registered on short datasets
+  // 3. Fallback for major swing points
   for (const swing of swings) {
     const sIndex = swing.index;
     if (sIndex < 0 || sIndex >= candles.length) continue;
@@ -1067,7 +867,7 @@ export function generateRecommendation(
     } else {
       entryMin = Math.round(currentPrice * 0.92);
       entryMax = Math.round(currentPrice * 0.95);
-      reasoning.push(`Downtrend structure. No bullish CHoCH (Change of Character) confirmation yet.`);
+      reasoning.push(`Downtrend structure. Awaiting bullish momentum reversal or demand POI formation.`);
     }
   }
 
@@ -1283,7 +1083,7 @@ export function generateRecommendation(
       ? `Bullish Momentum Rally + FVG/OB/Gap Pullback (R:R 1:${riskRewardRatio})`
       : structure === 'SIDEWAYS'
       ? `Sideways Accumulation in ${primaryZoneType} Zone (R:R 1:${riskRewardRatio})`
-      : `Downtrend Structure - Awaiting Bullish CHoCH`;
+      : `Downtrend Structure - Awaiting Bullish Wave Reversal`;
 
   const mostLikelyScenario = generateSmcScenario(
     structure,
@@ -1324,7 +1124,7 @@ export function generateRecommendation(
 }
 
 /**
- * Generates step-by-step SMC Roadmap Scenario Projection
+ * Generates step-by-step Elliott Wave & SMC Roadmap Scenario Projection
  */
 export function generateSmcScenario(
   structure: MarketStructureType,
@@ -1342,14 +1142,14 @@ export function generateSmcScenario(
   if (status === 'ON_BUY_AREA') {
     return {
       title: 'Primary SMC Scenario: Optimal Entry Execution in Demand Buy Zone',
-      type: 'BOS_CONTINUATION',
+      type: 'ELLIOTT_IMPULSE_EXPANSION',
       probability: 'VERY HIGH',
       targetDescription: `Buy Area: Rp ${entryMin.toLocaleString()} - Rp ${entryMax.toLocaleString()} | Target TP1: Rp ${tp1.toLocaleString()}`,
       steps: [
         `Entry Zone Precision: Price is situated inside the SMC Buy Zone (Rp ${entryMin.toLocaleString()} - Rp ${entryMax.toLocaleString()}).`,
         `Smart Money Accumulation: Selling pressure absorbed by institutional buyers at ${primaryZoneType} POI.`,
         `Impulsive Rally: Projected to rebound upwards towards TP1 target at Rp ${tp1.toLocaleString()}.`,
-        `Trend Continuation: Break above TP1 opens expansion path towards TP2 target at Rp ${tp2.toLocaleString()}.`,
+        `Wave Extension: Expansion past TP1 opens continuation towards TP2 target at Rp ${tp2.toLocaleString()}.`,
       ],
     };
   }
@@ -1372,44 +1172,44 @@ export function generateSmcScenario(
   if (status === 'TAPPED_POI_REBOUND') {
     return {
       title: 'Primary SMC Scenario: Confirmed Rebound After Retesting Yesterday\'s Demand FVG/OB',
-      type: 'BOS_CONTINUATION',
+      type: 'ELLIOTT_IMPULSE_EXPANSION',
       probability: 'VERY HIGH',
       targetDescription: `Target TP1: Rp ${tp1.toLocaleString()} | Target TP2: Rp ${tp2.toLocaleString()}`,
       steps: [
         `Demand Zone Retest: Previous candle successfully retested Demand area (${primaryZoneType}) and closed higher cleanly.`,
         `Buyer Response: Demonstrates Smart Money buying pressure at POI without invalidating Swing Low structure.`,
         `Impulsive Expansion: Projected continuation towards nearest Swing High target at Rp ${tp1.toLocaleString()}.`,
-        `BOS Confirmation: Break & Close above previous High triggers continued Bullish BOS towards TP2 at Rp ${tp2.toLocaleString()}.`,
+        `Target Expansion: Sustained momentum leads to next Fibonacci expansion target at Rp ${tp2.toLocaleString()}.`,
       ],
     };
   }
 
   if (status === 'WAIT_FVG_CREATION') {
     return {
-      title: 'Primary SMC Scenario: Impulse Breakout & New Bullish BOS Formation',
-      type: 'BOS_CONTINUATION',
+      title: 'Primary SMC Scenario: Impulse Breakout & New Momentum Expansion',
+      type: 'ELLIOTT_IMPULSE_EXPANSION',
       probability: 'VERY HIGH',
       targetDescription: `Target TP1: Rp ${tp1.toLocaleString()} | Target TP2: Rp ${tp2.toLocaleString()}`,
       steps: [
         `Momentum Booster: Price leaped impulsively past previous High driven by institutional volume spike.`,
         `FVG Formation: Awaiting candle close to confirm new Fair Value Gap (FVG) above.`,
         `Healthy Retest: Likely minor consolidation / measured pullback to collect Smart Money entries at new FVG.`,
-        `BOS Execution: Push from FVG triggers subsequent Bullish BOS towards target Rp ${tp1.toLocaleString()}.`,
+        `Impulse Continuation: Push from FVG triggers subsequent expansion wave towards target Rp ${tp1.toLocaleString()}.`,
       ],
     };
   }
 
   if (status === 'STRONG_BUY_POI') {
     return {
-      title: 'Primary SMC Scenario: Rebound from Demand Zone / POI & Bullish BOS Trigger',
-      type: 'BOS_CONTINUATION',
+      title: 'Primary SMC Scenario: Rebound from Demand Zone / POI & Wave Continuation',
+      type: 'ELLIOTT_IMPULSE_EXPANSION',
       probability: 'VERY HIGH',
       targetDescription: `Target TP1: Rp ${tp1.toLocaleString()} | Target TP2: Rp ${tp2.toLocaleString()}`,
       steps: [
         `Demand Zone Test: Price sits at institutional accumulation zone (${primaryZoneType}) Rp ${entryMin.toLocaleString()} - Rp ${entryMax.toLocaleString()}.`,
         `Smart Money Response: Confirmed institutional volume accumulation (buying tail) holding price.`,
         `Impulsive Push: Projected strong bounce towards nearest Swing High at Rp ${recentHighSwing?.price.toLocaleString() ?? tp1.toLocaleString()}.`,
-        `BOS Confirmation: Body Close above High confirms new Bullish BOS towards TP2 Rp ${tp2.toLocaleString()}.`,
+        `Extension Target: Wave continuation targets TP2 at Rp ${tp2.toLocaleString()}.`,
       ],
     };
   }
@@ -1424,7 +1224,7 @@ export function generateSmcScenario(
         `Minor Overbought Phase: Price currently above ideal entry range, requiring discount price re-alignment.`,
         `Imbalance Retest: Projected measured pullback to ${primaryZoneType} Rp ${entryMin.toLocaleString()} - Rp ${entryMax.toLocaleString()} to fill imbalance (FVG).`,
         `SSL Liquidity Sweep: Reversal reaction following Sellside Liquidity sweep without breaking main HL.`,
-        `Continued Rally: Institutional buyers re-enter triggering new impulsive wave to print further Bullish BOS.`,
+        `Continued Rally: Institutional buyers re-enter triggering new impulsive wave towards targets.`,
       ],
     };
   }
@@ -1439,21 +1239,21 @@ export function generateSmcScenario(
         `Range Consolidation: Price moving inside Support/Demand Zone range Rp ${entryMin.toLocaleString()} - Rp ${entryMax.toLocaleString()}.`,
         `Liquidity Sweep: Testing lower boundary to sweep retail Sellside Liquidity (SSL).`,
         `Volume Confirmation: Awaiting gradual Smart Money accumulation until volume surges above 20-MA.`,
-        `CHoCH/BOS Expansion: Breakout and Body Close above upper boundary initiates new uptrend.`,
+        `Breakout Expansion: Breakout and Body Close above upper boundary initiates new uptrend wave.`,
       ],
     };
   }
 
   return {
-    title: 'Primary SMC Scenario: Potential Reversal via Bullish CHoCH (Change of Character)',
-    type: 'REVERSAL_CHOCH',
+    title: 'Primary SMC Scenario: Potential Reversal via Bullish Wave Formation',
+    type: 'ELLIOTT_WAVE_REVERSAL',
     probability: 'MEDIUM',
-    targetDescription: `Key CHoCH Level: Rp ${recentHighSwing?.price.toLocaleString() ?? entryMax.toLocaleString()} | Target TP: Rp ${tp1.toLocaleString()}`,
+    targetDescription: `Key Reversal Level: Rp ${recentHighSwing?.price.toLocaleString() ?? entryMax.toLocaleString()} | Target TP: Rp ${tp1.toLocaleString()}`,
     steps: [
       `Active Downtrend: Current price in Bearish structure, forming Lower Lows (LL) and Lower Highs (LH).`,
       `Base / Sweep Formation: Seeking rebound point near psychological Support with Sellside Liquidity Sweep potential.`,
-      `Bullish CHoCH Confirmation: Reversal requires impulsive rally & Body Close above last Lower High (LH) (${recentHighSwing?.price.toLocaleString() ?? entryMax.toLocaleString()}).`,
-      `Retest & New Uptrend: Once CHoCH confirmed, light retest to new FVG provides low-risk Long entry.`,
+      `Bullish Reversal Confirmation: Reversal requires impulsive rally & Body Close above last Lower High (LH) (${recentHighSwing?.price.toLocaleString() ?? entryMax.toLocaleString()}).`,
+      `Retest & New Uptrend: Once reversal confirmed, light retest to new FVG provides low-risk Long entry.`,
     ],
   };
 }

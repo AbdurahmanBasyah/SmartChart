@@ -524,7 +524,11 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
                   return (
                     <tr
                       key={stock.symbol}
-                      onClick={() => onSelectStock(stock)}
+                      onClick={() => {
+                        const targetTicker = stock.ticker === '^JKSE' || stock.ticker === 'JKSE' ? 'IHSG' : stock.ticker;
+                        window.open(`/analysis/${encodeURIComponent(targetTicker)}`, '_blank');
+                        onSelectStock(stock);
+                      }}
                       className="hover:bg-slate-800/60 transition-colors cursor-pointer group"
                     >
                       {/* Ticker & Name */}
@@ -666,11 +670,13 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
+                            const targetTicker = stock.ticker === '^JKSE' || stock.ticker === 'JKSE' ? 'IHSG' : stock.ticker;
+                            window.open(`/analysis/${encodeURIComponent(targetTicker)}`, '_blank');
                             onSelectStock(stock);
                           }}
                           className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs inline-flex items-center gap-1 cursor-pointer transition-colors"
                         >
-                          <span>Chart</span>
+                          <span>Analyze</span>
                           <ChevronRight className="w-3.5 h-3.5" />
                         </button>
                       </td>

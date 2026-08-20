@@ -16,15 +16,44 @@ export interface SwingPoint {
   type: SwingType;
 }
 
-export interface BosChochLine {
-  id: string;
-  type: 'BOS' | 'CHoCH';
-  direction: 'bullish' | 'bearish';
-  startIndex: number;
-  endIndex: number;
-  price: number;
-  label: string;
+export interface ElliottWavePoint {
+  wave: '0' | '1' | '2' | '3' | '4' | '5' | 'A' | 'B' | 'C';
+  label: string; // e.g. "(1)", "(2)", "(3)", "(4)", "(5)", "(A)", "(B)", "(C)"
+  index: number;
   time: string;
+  price: number;
+  type: 'PEAK' | 'TROUGH' | 'ORIGIN';
+}
+
+export interface ElliottWaveRule {
+  rule: string;
+  passed: boolean;
+  note: string;
+}
+
+export interface ElliottWaveTarget {
+  targetPrice: number;
+  percentGain: number;
+  ratioLabel: string;
+  description: string;
+}
+
+export interface ElliottWaveAnalysis {
+  currentWave: 'WAVE_1' | 'WAVE_2' | 'WAVE_3' | 'WAVE_4' | 'WAVE_5' | 'WAVE_A' | 'WAVE_B' | 'WAVE_C';
+  waveLabel: string; // e.g. "Wave (3) Impulse Expansion"
+  phase: 'IMPULSE' | 'CORRECTION';
+  probability: 'VERY HIGH' | 'HIGH' | 'MEDIUM';
+  points: ElliottWavePoint[];
+  invalidationLevel: {
+    price: number;
+    percentFromCurrent: number;
+    rule: string;
+    description: string;
+  };
+  projectedTargets: ElliottWaveTarget[];
+  rules: ElliottWaveRule[];
+  summary: string;
+  momentumDivergence?: boolean;
 }
 
 export interface FvgZone {
@@ -119,7 +148,7 @@ export interface TradeRecommendation {
 
 export interface SmcScenario {
   title: string;
-  type: 'BOS_CONTINUATION' | 'PULLBACK_RETEST' | 'REVERSAL_CHOCH' | 'SIDEWAYS_ACCUMULATION' | 'BREAKDOWN_RISK';
+  type: 'ELLIOTT_IMPULSE_EXPANSION' | 'PULLBACK_RETEST' | 'ELLIOTT_WAVE_REVERSAL' | 'SIDEWAYS_ACCUMULATION' | 'BREAKDOWN_RISK';
   probability: 'VERY HIGH' | 'HIGH' | 'MEDIUM';
   targetDescription: string;
   steps: string[];
@@ -133,7 +162,7 @@ export interface StockData {
   conglomerate?: string; // e.g., "Prajogo Pangestu", "Grup Bakrie", "Happy Hapsoro", "Haji Isam"
   candles: Candle[];
   swings: SwingPoint[];
-  bosChochLines: BosChochLine[];
+  elliottWave?: ElliottWaveAnalysis;
   fvgs: FvgZone[];
   orderBlocks: OrderBlock[];
   priceGaps?: PriceGap[];

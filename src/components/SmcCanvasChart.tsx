@@ -44,7 +44,7 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
   const [showOrderBlocks, setShowOrderBlocks] = useState(true);
   const [showFvg, setShowFvg] = useState(true);
   const [showGaps, setShowGaps] = useState(true);
-  const [showBosChoch, setShowBosChoch] = useState(true);
+  const [showElliottWave, setShowElliottWave] = useState(true);
   const [showLiquidity, setShowLiquidity] = useState(true);
   const [showSupportResistance, setShowSupportResistance] = useState(true);
   const [showRiskRewardBox, setShowRiskRewardBox] = useState(true);
@@ -492,41 +492,96 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
       });
     }
 
-    // --- DRAW BOS & CHOCH LINES ---
-    if (showBosChoch && stock?.bosChochLines) {
-      const drawnLabelPositions: { x: number; y: number }[] = [];
+    // --- DRAW ELLIOTT WAVE STRUCTURE ---
+    if (showElliottWave && stock?.elliottWave) {
+      const ew = stock.elliottWave;
+      const points = ew.points || [];
 
-      (stock.bosChochLines || []).forEach((line) => {
-        if (line.endIndex >= startIndex && line.startIndex <= endIndex) {
-          const startX = getX(line.startIndex);
-          const endX = getX(line.endIndex);
-          const y = getY(line.price);
+      // 1. Draw connecting polyline between confirmed Elliott Wave points
+      if (points.length >= 2) {
+        ctx.save();
+        ctx.strokeStyle = ew.phase === 'IMPULSE' ? '#38bdf8' : '#f59e0b'; // Sky blue for impulse, amber for corrective
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([4, 2]);
+        ctx.beginPath();
+        let firstPt = true;
+        for (const pt of points) {
+          const px = getX(pt.index);
+          const py = getY(pt.price);
+          if (firstPt) {
+            ctx.moveTo(px, py);
+            firstPt = false;
+          } else {
+            ctx.lineTo(px, py);
+          }
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
 
-          ctx.strokeStyle = line.type === 'CHoCH' ? '#f59e0b' : '#38bdf8'; // Amber for CHoCH, Sky blue for BOS
-          ctx.lineWidth = 1.5;
+      // 2. Draw Wave Number/Letter Badges at each swing point
+      for (const pt of points) {
+        if (pt.index >= startIndex && pt.index <= endIndex) {
+          const px = getX(pt.index);
+          const py = getY(pt.price);
+          const isPeak = pt.type === 'PEAK';
+          const badgeY = isPeak ? py - 18 : py + 18;
+
+          ctx.save();
+          // Circular badge
           ctx.beginPath();
-          ctx.moveTo(startX, y);
-          ctx.lineTo(endX, y);
+          ctx.arc(px, badgeY, 11, 0, Math.PI * 2);
+          ctx.fillStyle = isPeak ? '#0284c7' : '#0d9488';
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.5;
           ctx.stroke();
 
-          // Text label with collision avoidance
-          const midX = (startX + endX) / 2;
-          let labelY = y - 4;
-
-          const collision = drawnLabelPositions.some(
-            (pos) => Math.abs(pos.y - labelY) < 14 && Math.abs(pos.x - midX) < 70
-          );
-          if (collision) {
-            labelY = y + 12; // Shift label below line if overlapping
-          }
-          drawnLabelPositions.push({ x: midX, y: labelY });
-
-          ctx.fillStyle = line.type === 'CHoCH' ? '#fbbf24' : '#7dd3fc';
+          // Label text (e.g. "1", "2", "3", "A", "B", etc.)
+          ctx.fillStyle = '#ffffff';
           ctx.font = 'bold 10px Inter, sans-serif';
           ctx.textAlign = 'center';
-          ctx.fillText(`— ${line.label} —`, midX, labelY);
+          ctx.textBaseline = 'middle';
+          ctx.fillText(pt.label.replace(/[()]/g, ''), px, badgeY);
+
+          // Subtext with price
+          ctx.font = '8px Inter, sans-serif';
+          ctx.fillStyle = '#94a3b8';
+          ctx.fillText(`Rp ${Math.round(pt.price).toLocaleString()}`, px, isPeak ? badgeY - 14 : badgeY + 14);
+          ctx.restore();
         }
-      });
+      }
+
+      // 3. Draw Invalidation Level Line
+      const invPrice = ew.invalidationLevel?.price;
+      const invRule = ew.invalidationLevel?.rule;
+      if (invPrice && invPrice > 0) {
+        const invY = getY(invPrice);
+        if (invY >= paddingTop && invY <= paddingTop + priceChartHeight) {
+          ctx.save();
+          ctx.strokeStyle = '#ef4444'; // Red line for invalidation
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([5, 4]);
+          ctx.beginPath();
+          ctx.moveTo(paddingLeft, invY);
+          ctx.lineTo(width - paddingRight, invY);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Invalidation Label Badge
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
+          const invText = `⚠️ Invalidation: Rp ${Math.round(invPrice).toLocaleString()} (${invRule || 'Rule breached'})`;
+          ctx.font = 'bold 9px Inter, sans-serif';
+          const textWidth = ctx.measureText(invText).width;
+          ctx.fillRect(paddingLeft + 8, invY - 14, textWidth + 12, 16);
+
+          ctx.fillStyle = '#ffffff';
+          ctx.textAlign = 'left';
+          ctx.fillText(invText, paddingLeft + 14, invY - 3);
+          ctx.restore();
+        }
+      }
     }
 
     // --- DRAW LIQUIDITY SWEEPS ---
@@ -890,7 +945,7 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
     showOrderBlocks,
     showFvg,
     showGaps,
-    showBosChoch,
+    showElliottWave,
     showLiquidity,
     showSupportResistance,
     showRiskRewardBox,
@@ -1321,13 +1376,13 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
             </button>
 
             <button
-              onClick={() => setShowBosChoch(!showBosChoch)}
+              onClick={() => setShowElliottWave(!showElliottWave)}
               className={`px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer ${
-                showBosChoch ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'text-slate-500'
+                showElliottWave ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'text-slate-500'
               }`}
-              title="Toggle BOS & CHoCH Lines"
+              title="Toggle Elliott Wave Structure & Projections"
             >
-              BOS/CHoCH
+              Elliott Wave
             </button>
           </div>
 

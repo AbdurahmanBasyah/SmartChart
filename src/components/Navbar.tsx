@@ -66,6 +66,9 @@ export const Navbar: React.FC<NavbarProps> = ({
       tickerToSearch = '^JKSE';
     }
 
+    const cleanDisplayTicker = tickerToSearch === '^JKSE' ? 'IHSG' : tickerToSearch;
+    window.open(`/analysis/${encodeURIComponent(cleanDisplayTicker)}`, '_blank');
+
     // Check if stock already exists in local list
     const existing = stocks.find(
       (s) =>
@@ -248,6 +251,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <button
                     key={s.symbol}
                     onClick={() => {
+                      const displayTicker = s.ticker === '^JKSE' || s.ticker === 'JKSE' ? 'IHSG' : s.ticker;
+                      window.open(`/analysis/${encodeURIComponent(displayTicker)}`, '_blank');
                       onSelectStock(s);
                       setActiveTab('chart');
                       setShowSearchDropdown(false);
