@@ -170,7 +170,7 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
 
     // Smart Market Quality Filter: Eliminate severe downtrend / illiquid / AVOID stocks
     if (excludeDowntrend) {
-      if ((stock.currentPrice ?? 0) < 50) return false; // Exclude penny stocks < Rp 50
+      if ((stock.currentPrice ?? 0) <= 50) return false; // Exclude penny stocks <= Rp 50
       if (rec?.action === 'AVOID') return false; // Exclude stocks flagged AVOID
       if (rec?.status === 'NO_TRADE_ZONE') return false; // Exclude stocks in no-trade zone
     }
@@ -526,7 +526,7 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
                       key={stock.symbol}
                       onClick={() => {
                         const targetTicker = stock.ticker === '^JKSE' || stock.ticker === 'JKSE' ? 'IHSG' : stock.ticker;
-                        window.open(`/analysis/${encodeURIComponent(targetTicker)}`, '_blank');
+                        window.open(`/analysis/${encodeURIComponent(targetTicker)}`);
                         onSelectStock(stock);
                       }}
                       className="hover:bg-slate-800/60 transition-colors cursor-pointer group"
