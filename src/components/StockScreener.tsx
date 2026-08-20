@@ -526,7 +526,15 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
                       key={stock.symbol}
                       onClick={() => {
                         const targetTicker = stock.ticker === '^JKSE' || stock.ticker === 'JKSE' ? 'IHSG' : stock.ticker;
-                        window.open(`/analysis/${encodeURIComponent(targetTicker)}`);
+                        
+                        try {
+                          window.history.pushState(
+                            null,
+                            '',
+                            `/analysis/${encodeURIComponent(targetTicker)}`
+                          );
+                        } catch (err) {}
+
                         onSelectStock(stock);
                       }}
                       className="hover:bg-slate-800/60 transition-colors cursor-pointer group"
