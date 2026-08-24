@@ -1,7 +1,7 @@
 import {
   fetchBrokerDataAccumulation,
   validateBrokerDataAccumulationRequest,
-} from './_lib/brokerDataClient';
+} from './_lib/brokerDataClient.js';
 
 function queryValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
