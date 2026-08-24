@@ -233,9 +233,9 @@ export function detectFVGs(candles: Candle[], isIhsg: boolean = false): FvgZone[
 }
 
 /**
- * Detects Ordinary Price Gaps (Overnight / Discontinuity Jump Gaps)
- * - Bullish Gap (Gap Up): Day A close (or high) < Day B low (e.g. Day A close = 700, Day B open = 740 & low = 710 -> gap up 700-710)
- * - Bearish Gap (Gap Down): Day A close (or low) > Day B high
+ * Detects active opening gaps and returns only the remaining unfilled section.
+ * - Bullish: current open is strictly above previous close.
+ * - Bearish: current open is strictly below previous close.
  */
 export function detectPriceGaps(candles: Candle[]): PriceGap[] {
   const gaps: PriceGap[] = [];
@@ -245,68 +245,68 @@ export function detectPriceGaps(candles: Candle[]): PriceGap[] {
     const prev = candles[i - 1]; // Day A
     const curr = candles[i];     // Day B
 
-    // Bullish Gap (Gap Up): e.g. Day A close = 700, Day B open = 740, low = 710 -> gap up at 700-710
-    if (curr.low > prev.close) {
-      const top = Math.round(curr.low);
-      const bottom = Math.round(prev.close);
-      
-      if (top > bottom) {
-        let mitigated = false;
-        let endIndex = candles.length - 1;
+    // Bullish opening gap: previous close -> current open.
+    if (curr.open > prev.close) {
+      const bottom = prev.close;
+      const initialTop = curr.open;
+      let minimumReachedLow = initialTop;
 
-        for (let j = i + 1; j < candles.length; j++) {
-          if (candles[j].low <= bottom) {
-            mitigated = true;
-            endIndex = j;
-            break;
-          }
+      for (let j = i; j < candles.length; j++) {
+        if (candles[j].low < initialTop) {
+          minimumReachedLow = Math.min(
+            minimumReachedLow,
+            Math.max(bottom, candles[j].low),
+          );
         }
+      }
 
+      const top = Math.min(initialTop, minimumReachedLow);
+      if (top > bottom) {
         gaps.push({
           id: `gap-bull-${i}`,
           type: 'bullish',
           top,
           bottom,
           startIndex: i - 1,
-          endIndex: mitigated ? endIndex : candles.length - 1,
-          mitigated,
+          endIndex: candles.length - 1,
+          mitigated: false,
           time: curr.time,
         });
       }
     }
 
-    // Bearish Gap (Gap Down): e.g. Day A close = 700, Day B open = 660, high = 680 -> gap down at 680-700
-    if (curr.high < prev.close) {
-      const top = Math.round(prev.close);
-      const bottom = Math.round(curr.high);
+    // Bearish opening gap: current open -> previous close.
+    if (curr.open < prev.close) {
+      const initialBottom = curr.open;
+      const top = prev.close;
+      let maximumReachedHigh = initialBottom;
 
-      if (top > bottom) {
-        let mitigated = false;
-        let endIndex = candles.length - 1;
-
-        for (let j = i + 1; j < candles.length; j++) {
-          if (candles[j].high >= top) {
-            mitigated = true;
-            endIndex = j;
-            break;
-          }
+      for (let j = i; j < candles.length; j++) {
+        if (candles[j].high > initialBottom) {
+          maximumReachedHigh = Math.max(
+            maximumReachedHigh,
+            Math.min(top, candles[j].high),
+          );
         }
+      }
 
+      const bottom = Math.max(initialBottom, maximumReachedHigh);
+      if (bottom < top) {
         gaps.push({
           id: `gap-bear-${i}`,
           type: 'bearish',
           top,
           bottom,
           startIndex: i - 1,
-          endIndex: mitigated ? endIndex : candles.length - 1,
-          mitigated,
+          endIndex: candles.length - 1,
+          mitigated: false,
           time: curr.time,
         });
       }
     }
   }
 
-  return gaps.filter((g) => !g.mitigated);
+  return gaps;
 }
 
 /**
@@ -642,6 +642,46 @@ export function determineMarketStructure(candles: Candle[], swings: SwingPoint[]
   }
 
   return 'SIDEWAYS';
+}
+
+interface PriorTappedZone {
+  type: 'ORDER_BLOCK' | 'FVG' | 'GAP';
+  top: number;
+  bottom: number;
+}
+
+function findPriorTappedBullishZone(candles: Candle[], isIhsg: boolean): PriorTappedZone | null {
+  if (candles.length < 2) return null;
+
+  const lastIndex = candles.length - 1;
+  const previousCandle = candles[lastIndex - 1];
+  const lastCandle = candles[lastIndex];
+  const priorCandles = candles.slice(0, -1);
+  const priorSwings = detectSwings(priorCandles);
+  const priorFvgs = detectFVGs(priorCandles, isIhsg)
+    .filter((zone) => zone.type === 'bullish' && !zone.mitigated);
+  const priorOrderBlocks = detectOrderBlocks(
+    priorCandles,
+    priorSwings,
+    priorFvgs,
+    calculateVolumeMA(priorCandles, 20),
+  ).filter((zone) => zone.type === 'bullish' && !zone.mitigated);
+  const priorGaps = detectPriceGaps(priorCandles)
+    .filter((zone) => zone.type === 'bullish' && !zone.mitigated);
+  const candidates: PriorTappedZone[] = [
+    ...priorOrderBlocks.map((zone) => ({ type: 'ORDER_BLOCK' as const, top: zone.top, bottom: zone.bottom })),
+    ...priorFvgs.map((zone) => ({ type: 'FVG' as const, top: zone.top, bottom: zone.bottom })),
+    ...priorGaps.map((zone) => ({ type: 'GAP' as const, top: zone.top, bottom: zone.bottom })),
+  ];
+
+  return candidates.find(
+    (zone) =>
+      previousCandle.close > zone.top &&
+      lastCandle.open > zone.top &&
+      lastCandle.low <= zone.top &&
+      lastCandle.high >= zone.bottom &&
+      lastCandle.close > zone.top,
+  ) || null;
 }
 
 /**
@@ -998,51 +1038,20 @@ export function generateRecommendation(
   // Near entry is ONLY when confirmed POI exists, price is not on an explosive breakout leg, and price is strictly 0.1% to 3.0% above entryMax
   const isNearEntry = hasConfirmedPoi && !isBreakoutRising && currentPrice > entryMax && currentPrice <= entryMax * 1.03;
 
-  // Check if a closed candle tapped into an active DEMAND POI (Bullish OB / Bullish FVG / Bullish Gap)
-  // RULE: The POI MUST have been formed by earlier candles (not created by the candle itself)
-  let isYesterdayTappedPoi = false;
-  let tappedPoiLabel = '';
-  const candidateCandles = [lastCandle, prevCandle].filter(Boolean) as Candle[];
-  for (const c of candidateCandles) {
-    if (isYesterdayTappedPoi) break;
-    const cIndex = candles.indexOf(c);
-    if (cIndex === -1) continue;
-
-    // Strictly match BULLISH Demand zones (Bullish OB, Bullish FVG, Bullish Gap)
-    // where price tapped into the zone (c.low <= top && c.high >= bottom)
-    // AND closed at or above the zone top boundary (c.close >= top)
-    // AND the zone was formed strictly by EARLIER candles!
-    const tappedOb = activeBullObs.find(
-      (ob) => ob.type === 'bullish' && ob.startIndex < cIndex - 1 && c.low <= ob.top && c.high >= ob.bottom && c.close >= ob.top
-    );
-    const tappedFvg = activeBullFvgs.find(
-      (fvg) => fvg.type === 'bullish' && fvg.startIndex < cIndex - 2 && c.low <= fvg.top && c.high >= fvg.bottom && c.close >= fvg.top
-    );
-    const tappedGap = activeBullGaps.find(
-      (gap) => gap.type === 'bullish' && gap.startIndex < cIndex - 1 && c.low <= gap.top && c.high >= gap.bottom && c.close >= gap.top
-    );
-
-    if (tappedOb) {
-      isYesterdayTappedPoi = true;
-      tappedPoiLabel = `Demand Order Block (Rp ${tappedOb.bottom.toLocaleString()} - ${tappedOb.top.toLocaleString()})`;
-    } else if (tappedFvg) {
-      isYesterdayTappedPoi = true;
-      tappedPoiLabel = `Bullish Fair Value Gap / FVG (Rp ${tappedFvg.bottom.toLocaleString()} - ${tappedFvg.top.toLocaleString()})`;
-    } else if (tappedGap) {
-      isYesterdayTappedPoi = true;
-      tappedPoiLabel = `Bullish Price Gap (Rp ${tappedGap.bottom.toLocaleString()} - ${tappedGap.top.toLocaleString()})`;
-    }
-  }
+  const tappedZone = lastCandle
+    ? findPriorTappedBullishZone(candles, isIhsg)
+    : null;
+  const isRecentTappedPoi = Boolean(tappedZone);
 
   let status: TradeRecommendation['status'] = 'WAIT_PULLBACK_FVG';
 
-  if (hasRecentLL || (riskRewardRatio < 1.1 && !isOnBuyArea && !isYesterdayTappedPoi)) {
-    status = 'NO_ENTRY';
-  } else if (isYesterdayTappedPoi) {
+  if (isRecentTappedPoi) {
     status = 'TAPPED_POI_REBOUND';
     reasoning.unshift(
-      `🎯 RECENTLY TAPPED POI: Price recently (Rp ${prevCandle?.close.toLocaleString()}) touched Demand zone ${tappedPoiLabel} and rebounded successfully.`
+      `TAPPED POI REBOUND: Low Rp ${lastCandle?.low.toLocaleString()} retraced from above into active ${tappedZone?.type} Rp ${tappedZone?.bottom.toLocaleString()} - ${tappedZone?.top.toLocaleString()} and closed at Rp ${lastCandle?.close.toLocaleString()} above the zone.`,
     );
+  } else if (hasRecentLL || (riskRewardRatio < 1.1 && !isOnBuyArea)) {
+    status = 'NO_ENTRY';
   } else if (isOnBuyArea) {
     status = 'ON_BUY_AREA';
     reasoning.unshift(

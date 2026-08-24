@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { motion } from 'motion/react';
 import {
   Filter,
   Search,
@@ -294,7 +295,12 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
   const endItemIndex = pageSize === 'ALL' ? totalItems : Math.min(safePage * numPageSize, totalItems);
 
   return (
-    <div className="space-y-6">
+    <motion.div
+      initial={{ opacity: 0, y: 14 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, ease: 'easeOut' }}
+      className="space-y-6"
+    >
       {/* Header & Filter Controls */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl">
         <div className="flex flex-wrap items-center justify-between gap-4 mb-5 border-b border-slate-800 pb-4">
@@ -816,6 +822,6 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
           </div>
         </div>
       )}
-    </div>
+    </motion.div>
   );
 };

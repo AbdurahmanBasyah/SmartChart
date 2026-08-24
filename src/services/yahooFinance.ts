@@ -1,6 +1,7 @@
 import { Candle, StockData } from '../types';
 import { buildStockData, generateCandles, liquidIDXStocks, getLatestClosedTradingDateStr, formatJakartaDate } from '../data/mockStocks';
 import { roundToIdxTick } from '../utils/idxTickRules';
+import { canonicalizeCandlePrices } from '../utils/candleNormalization';
 
 export interface YahooStockMeta {
   symbol: string;
@@ -153,12 +154,10 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
 
           if (!seenDates.has(dateStr)) {
             seenDates.add(dateStr);
+            const canonical = canonicalizeCandlePrices(o, h, l, c, roundPrice);
             candles.push({
               time: dateStr,
-              open: roundPrice(o),
-              high: roundPrice(Math.max(h, o, c)),
-              low: roundPrice(Math.min(l, o, c)),
-              close: roundPrice(c),
+              ...canonical,
               volume: Math.round(v),
             });
           }
@@ -181,19 +180,22 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
               const openPrice = meta.regularMarketDayOpen || lastCandle?.close || latestPrice;
               const highPrice = meta.regularMarketDayHigh || Math.max(openPrice, latestPrice);
               const lowPrice = meta.regularMarketDayLow || Math.min(openPrice, latestPrice);
+              const canonical = canonicalizeCandlePrices(openPrice, highPrice, lowPrice, latestPrice, roundPrice);
 
               candles.push({
                 time: metaDateStr,
-                open: roundPrice(openPrice),
-                high: roundPrice(highPrice),
-                low: roundPrice(lowPrice),
-                close: roundPrice(latestPrice),
+                ...canonical,
                 volume: Math.round(vol > 0 ? vol : (lastCandle?.volume || 500000)),
               });
             } else if (lastCandle.time === metaDateStr) {
-              lastCandle.close = roundPrice(latestPrice);
-              if (meta.regularMarketDayHigh) lastCandle.high = roundPrice(meta.regularMarketDayHigh);
-              if (meta.regularMarketDayLow) lastCandle.low = roundPrice(meta.regularMarketDayLow);
+              const canonical = canonicalizeCandlePrices(
+                meta.regularMarketDayOpen || lastCandle.open,
+                meta.regularMarketDayHigh || lastCandle.high,
+                meta.regularMarketDayLow || lastCandle.low,
+                latestPrice,
+                roundPrice,
+              );
+              Object.assign(lastCandle, canonical);
               if (meta.regularMarketVolume && meta.regularMarketVolume > 0) lastCandle.volume = Math.round(meta.regularMarketVolume);
             }
           }

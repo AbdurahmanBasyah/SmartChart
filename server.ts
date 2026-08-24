@@ -1,9 +1,15 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { getMockStocks, buildStockData, generateCandles, liquidIDXStocks } from './src/data/mockStocks';
 import { fetchYahooStockData } from './src/services/yahooFinance';
 import { StockData } from './src/types';
+import {
+  fetchBrokerDataAccumulation,
+  fetchBrokerDataSummary,
+  validateBrokerDataAccumulationRequest,
+} from './api/_lib/brokerDataClient';
 
 async function startServer() {
   const app = express();
@@ -92,6 +98,16 @@ async function startServer() {
     next();
   });
 
+  const setSuccessfulGetCache = (res: express.Response, maxAge: number, staleWhileRevalidate: number) => {
+    res.removeHeader('Pragma');
+    res.removeHeader('Expires');
+    res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+    res.setHeader(
+      'Vercel-CDN-Cache-Control',
+      `public, s-maxage=${maxAge}, stale-while-revalidate=${staleWhileRevalidate}`,
+    );
+  };
+
   // API Routes
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -108,6 +124,7 @@ async function startServer() {
         stockMap.set(displayTicker.toUpperCase(), formatted);
       }
     });
+    setSuccessfulGetCache(res, 900, 86400);
     res.json(Array.from(stockMap.values()));
   });
 
@@ -138,6 +155,7 @@ async function startServer() {
           stockCache.set('JKSE', realData);
           stockCache.set('^JKSE', realData);
         }
+        setSuccessfulGetCache(res, 300, 3600);
         return res.json(realData);
       }
     } catch (e) {
@@ -146,11 +164,18 @@ async function startServer() {
 
     // 2. Check local cache if Yahoo Finance call failed or rate limited
     if (stockCache.has(cleanTicker)) {
+      setSuccessfulGetCache(res, 300, 3600);
       return res.json(stockCache.get(cleanTicker));
     }
     if (cleanTicker === '^JKSE') {
-      if (stockCache.has('^JKSE')) return res.json(stockCache.get('^JKSE'));
-      if (stockCache.has('IHSG')) return res.json(stockCache.get('IHSG'));
+      if (stockCache.has('^JKSE')) {
+        setSuccessfulGetCache(res, 300, 3600);
+        return res.json(stockCache.get('^JKSE'));
+      }
+      if (stockCache.has('IHSG')) {
+        setSuccessfulGetCache(res, 300, 3600);
+        return res.json(stockCache.get('IHSG'));
+      }
     }
 
     // 3. Dynamic generator fallback for unknown tickers
@@ -164,6 +189,7 @@ async function startServer() {
     );
 
     stockCache.set(cleanTicker, fallbackStock);
+    setSuccessfulGetCache(res, 300, 3600);
     return res.json(fallbackStock);
   };
 
@@ -191,6 +217,7 @@ async function startServer() {
       filtered = filtered.filter((s) => s.recommendation.volumeConfirmation);
     }
 
+    setSuccessfulGetCache(res, 900, 86400);
     res.json(filtered);
   });
 
@@ -204,6 +231,78 @@ async function startServer() {
       name: stock?.name || ticker,
       currentPrice: stock?.currentPrice || 1000,
     });
+  });
+
+  app.get('/api/broker-summary', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+
+    const symbol = String(req.query.symbol || req.query.ticker || '').trim();
+    const startDate = String(req.query.start_date || '').trim();
+    const endDate = String(req.query.end_date || '').trim();
+
+    if (!symbol || !startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        error: 'symbol, start_date, and end_date are required',
+      });
+    }
+
+    try {
+      const data = await fetchBrokerDataSummary({
+        symbol,
+        startDate,
+        endDate,
+        brokerLimit: Number(req.query.broker_limit || 20),
+        levelLimit: Number(req.query.level_limit || 25),
+      });
+
+      setSuccessfulGetCache(res, 300, 3600);
+      return res.json({ success: true, source: 'EXTERNAL', data });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown provider error';
+      console.error(`[broker-summary] ${message}`);
+      return res.status(502).json({
+        success: false,
+        source: 'EXTERNAL',
+        error: 'Broker summary is temporarily unavailable',
+      });
+    }
+  });
+
+  app.get('/api/broker-accumulation', async (req, res) => {
+    const symbol = String(req.query.symbol || '').trim();
+    const startDate = String(req.query.start_date || '').trim();
+    const endDate = String(req.query.end_date || '').trim();
+
+    if (!symbol || !startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        error: 'symbol, start_date, and end_date are required',
+      });
+    }
+
+    try {
+      validateBrokerDataAccumulationRequest({ symbol, startDate, endDate });
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Invalid accumulation request',
+      });
+    }
+
+    try {
+      const data = await fetchBrokerDataAccumulation({ symbol, startDate, endDate });
+      setSuccessfulGetCache(res, 300, 3600);
+      return res.json({ success: true, source: 'EXTERNAL', data });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown provider error';
+      console.error(`[broker-accumulation] ${message}`);
+      return res.status(502).json({
+        success: false,
+        source: 'EXTERNAL',
+        error: 'Broker accumulation is temporarily unavailable',
+      });
+    }
   });
 
   // Official IDX Exchange Member (Anggota Bursa) search API

@@ -35,6 +35,12 @@ export default async function handler(req: any, res: any) {
     try {
       const realData = await fetchYahooStockDataServer(cleanTicker);
       if (realData && realData.candles && realData.candles.length > 0) {
+        if (req.method === 'GET') {
+          res.removeHeader('Pragma');
+          res.removeHeader('Expires');
+          res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+          res.setHeader('Vercel-CDN-Cache-Control', 'public, s-maxage=300, stale-while-revalidate=3600');
+        }
         return res.status(200).json(realData);
       }
     } catch (err) {
@@ -50,6 +56,12 @@ export default async function handler(req: any, res: any) {
     );
 
     if (matched) {
+      if (req.method === 'GET') {
+        res.removeHeader('Pragma');
+        res.removeHeader('Expires');
+        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+        res.setHeader('Vercel-CDN-Cache-Control', 'public, s-maxage=300, stale-while-revalidate=3600');
+      }
       return res.status(200).json(matched);
     }
 
@@ -63,6 +75,12 @@ export default async function handler(req: any, res: any) {
       fallbackCandles
     );
 
+    if (req.method === 'GET') {
+      res.removeHeader('Pragma');
+      res.removeHeader('Expires');
+      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+      res.setHeader('Vercel-CDN-Cache-Control', 'public, s-maxage=300, stale-while-revalidate=3600');
+    }
     return res.status(200).json(fallbackStock);
   } catch (globalErr) {
     console.error('Unhandled error in /api/stock:', globalErr);

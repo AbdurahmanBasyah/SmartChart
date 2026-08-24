@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion } from 'motion/react';
 import {
   ShieldAlert,
   CheckCircle2,
@@ -57,7 +58,12 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({ stock 
   const rr = rec?.riskRewardRatio ?? 0;
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl space-y-6">
+    <motion.div
+      initial={{ opacity: 0, y: 14 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, ease: 'easeOut' }}
+      className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl space-y-6"
+    >
       {/* Top Header & Signal Badge */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800/80 pb-4">
         <div>
@@ -346,6 +352,6 @@ export const RecommendationPanel: React.FC<RecommendationPanelProps> = ({ stock 
         onClose={() => setIsTpModalOpen(false)}
         stock={stock}
       />
-    </div>
+    </motion.div>
   );
 };

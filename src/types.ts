@@ -56,6 +56,9 @@ export interface BrokerInventorySummary {
   ticker: string;
   stockName: string;
   currentPrice: number;
+  dataSource?: 'EXTERNAL' | 'SYNTHETIC';
+  sourceLabel?: string;
+  sourceNote?: string;
   startDate: string;
   endDate: string;
   totalTradingDays: number;

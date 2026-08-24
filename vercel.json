@@ -1,5 +1,6 @@
 {
   "rewrites": [
-    { "source": "/api/stock/(.*)", "destination": "/api/stock?symbol=$1" }
+    { "source": "/api/stock/(.*)", "destination": "/api/stock?symbol=$1" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }

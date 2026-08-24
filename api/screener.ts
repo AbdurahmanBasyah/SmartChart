@@ -31,6 +31,12 @@ export default async function handler(req: any, res: any) {
       filtered = filtered.filter((s) => s.recommendation?.volumeConfirmation);
     }
 
+    if (req.method === 'GET') {
+      res.removeHeader('Pragma');
+      res.removeHeader('Expires');
+      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+      res.setHeader('Vercel-CDN-Cache-Control', 'public, s-maxage=900, stale-while-revalidate=86400');
+    }
     return res.status(200).json(filtered);
   } catch (err) {
     console.error('API /screener handler error:', err);

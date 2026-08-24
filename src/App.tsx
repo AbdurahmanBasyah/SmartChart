@@ -5,13 +5,12 @@ import { ParallaxHero } from './components/ParallaxHero';
 import { SmcCanvasChart } from './components/SmcCanvasChart';
 import { RecommendationPanel } from './components/RecommendationPanel';
 import { StockScreener } from './components/StockScreener';
-import { PositionCalculator } from './components/PositionCalculator';
 import { Watchlist } from './components/Watchlist';
 import { InventoryChart } from './components/InventoryChart';
 import { SmcGuideModal } from './components/SmcGuideModal';
 import { SmcLoadingModal } from './components/SmcLoadingModal';
 import { SyncLoadingScreen } from './components/SyncLoadingScreen';
-import { getMockStocks, liquidIDXStocks } from './data/mockStocks';
+import { getMockStocks } from './data/mockStocks';
 import { StockData } from './types';
 
 function isMatchingTicker(tickerA?: string, tickerB?: string): boolean {
@@ -24,6 +23,21 @@ function isMatchingTicker(tickerA?: string, tickerB?: string): boolean {
   return isIhsgA && isIhsgB;
 }
 
+function safelyDecodeTicker(pathname: string, prefix: RegExp): string {
+  const rawTicker = pathname.replace(prefix, '').split('/')[0].trim();
+  if (!rawTicker) return '';
+  try {
+    return decodeURIComponent(rawTicker).trim().toUpperCase();
+  } catch {
+    return rawTicker.toUpperCase();
+  }
+}
+
+function normalizeStockTicker(value: string): string {
+  const clean = value.trim().toUpperCase().replace(/\.JK$/, '');
+  return clean === 'IHSG' || clean === 'JKSE' || clean === '^JKSE' ? '^JKSE' : clean;
+}
+
 export default function App() {
   // Check initial path (e.g. /analysis/BRPT, /inventory/BBCA, /screener, etc.)
   const initialPathname = typeof window !== 'undefined' ? window.location.pathname : '/';
@@ -31,15 +45,14 @@ export default function App() {
   const isDirectInventoryRoute = initialPathname.startsWith('/inventory/') || initialPathname === '/inventory';
   const isDirectScreener = initialPathname === '/screener';
   const isDirectWatchlist = initialPathname === '/watchlist';
-  const isDirectCalculator = initialPathname === '/calculator';
 
   const initialUrlTicker = isDirectAnalysisRoute
-    ? decodeURIComponent(initialPathname.replace(/^\/analysis\//, '')).trim().toUpperCase()
+    ? safelyDecodeTicker(initialPathname, /^\/analysis\//)
     : isDirectInventoryRoute
-    ? decodeURIComponent(initialPathname.replace(/^\/inventory\/?/, '')).trim().toUpperCase()
+    ? safelyDecodeTicker(initialPathname, /^\/inventory\/?/)
     : '';
 
-  const initialTab: 'landing' | 'chart' | 'inventory' | 'screener' | 'guide' | 'calculator' | 'watchlist' =
+  const initialTab: 'landing' | 'chart' | 'inventory' | 'screener' | 'guide' | 'watchlist' =
     isDirectAnalysisRoute
       ? 'chart'
       : isDirectInventoryRoute
@@ -48,11 +61,9 @@ export default function App() {
       ? 'screener'
       : isDirectWatchlist
       ? 'watchlist'
-      : isDirectCalculator
-      ? 'calculator'
       : 'landing';
 
-  const [activeTab, setActiveTab] = useState<'landing' | 'chart' | 'inventory' | 'screener' | 'guide' | 'calculator' | 'watchlist'>(
+  const [activeTab, setActiveTab] = useState<'landing' | 'chart' | 'inventory' | 'screener' | 'guide' | 'watchlist'>(
     initialTab
   );
   const [stocks, setStocks] = useState<StockData[]>([]);
@@ -75,22 +86,29 @@ export default function App() {
 
   // Synchronize browser history and popstate for back/forward navigation
   const stocksRef = useRef<StockData[]>(stocks);
+  const tickerCacheRef = useRef(new Map<string, { data: StockData; fetchedAt: number }>());
+  const tickerRequestsRef = useRef(new Map<string, Promise<StockData | null>>());
+  const universeFetchedAtRef = useRef(0);
   useEffect(() => {
     stocksRef.current = stocks;
   }, [stocks]);
 
   useEffect(() => {
+    if (window.location.pathname === '/calculator') {
+      window.history.replaceState(null, '', '/');
+    }
+
     const handlePopState = () => {
       const path = window.location.pathname;
       if (path.startsWith('/analysis/')) {
-        const t = decodeURIComponent(path.replace(/^\/analysis\//, '')).trim().toUpperCase();
+        const t = safelyDecodeTicker(path, /^\/analysis\//);
         setActiveTab('chart');
         if (t) {
           const match = stocksRef.current.find((s) => isMatchingTicker(s.ticker, t));
           if (match) setSelectedStock(match);
         }
       } else if (path.startsWith('/inventory/') || path === '/inventory') {
-        const t = decodeURIComponent(path.replace(/^\/inventory\/?/, '')).trim().toUpperCase();
+        const t = safelyDecodeTicker(path, /^\/inventory\/?/);
         setActiveTab('inventory');
         if (t) {
           const match = stocksRef.current.find((s) => isMatchingTicker(s.ticker, t));
@@ -101,7 +119,8 @@ export default function App() {
       } else if (path === '/watchlist') {
         setActiveTab('watchlist');
       } else if (path === '/calculator') {
-        setActiveTab('calculator');
+        window.history.replaceState(null, '', '/');
+        setActiveTab('landing');
       } else if (path === '/') {
         setActiveTab('landing');
       }
@@ -136,18 +155,89 @@ export default function App() {
     });
   };
 
+  const mergeStockIntoState = (incoming: StockData, select = false) => {
+    const key = normalizeStockTicker(incoming.ticker);
+    const existingAtCall = stocksRef.current.find((stock) => isMatchingTicker(stock.ticker, incoming.ticker));
+    let accepted = existingAtCall?.isRealData && !incoming.isRealData ? existingAtCall : incoming;
+    tickerCacheRef.current.set(key, { data: accepted, fetchedAt: Date.now() });
+    setStocks((prev) => {
+      const existing = prev.find((stock) => isMatchingTicker(stock.ticker, incoming.ticker));
+      if (existing?.isRealData && !incoming.isRealData) accepted = existing;
+      const exists = Boolean(existing);
+      const updated = exists
+        ? prev.map((stock) => (isMatchingTicker(stock.ticker, incoming.ticker) ? accepted : stock))
+        : [accepted, ...prev];
+      try {
+        localStorage.setItem('smc_custom_stocks', JSON.stringify(updated.filter((stock) => stock.isRealData)));
+      } catch {
+        // Storage is optional and must not affect market data state.
+      }
+      return updated;
+    });
+    if (select) setSelectedStock(accepted);
+  };
+
+  const fetchTickerData = async (ticker: string, force = false): Promise<StockData | null> => {
+    const key = normalizeStockTicker(ticker);
+    const cached = tickerCacheRef.current.get(key);
+    if (!force && cached && Date.now() - cached.fetchedAt < 5 * 60 * 1000) {
+      return cached.data;
+    }
+
+    const inFlight = tickerRequestsRef.current.get(key);
+    if (inFlight) return inFlight;
+
+    let request: Promise<StockData | null>;
+    request = (async () => {
+      let stockData: StockData | null = null;
+      try {
+        const response = await fetch(`/api/stock/${encodeURIComponent(key)}`);
+        if (response.ok) {
+          stockData = await response.json();
+        } else {
+          const fallbackResponse = await fetch(`/api/stock?symbol=${encodeURIComponent(key)}`);
+          if (fallbackResponse.ok) stockData = await fallbackResponse.json();
+        }
+      } catch {
+        // The client-side provider is the explicit fallback when the API route is unavailable.
+      }
+
+      if (!stockData || !Array.isArray(stockData.candles) || stockData.candles.length === 0) {
+        try {
+          const { fetchYahooStockData } = await import('./services/yahooFinance');
+          stockData = await fetchYahooStockData(key);
+        } catch {
+          stockData = null;
+        }
+      }
+
+      if (stockData && Array.isArray(stockData.candles) && stockData.candles.length > 0) {
+        tickerCacheRef.current.set(key, { data: stockData, fetchedAt: Date.now() });
+        return stockData;
+      }
+      return null;
+    })();
+    tickerRequestsRef.current.set(key, request);
+    void request.finally(() => {
+      if (tickerRequestsRef.current.get(key) === request) tickerRequestsRef.current.delete(key);
+    });
+    return request;
+  };
+
   // Load stock data on mount
   useEffect(() => {
     let isMounted = true;
 
     async function loadStocks() {
       let initialList: StockData[] = [];
+      let loadedFromSnapshot = false;
       try {
         const res = await fetch('/api/stocks');
         if (res.ok) {
           const data: StockData[] = await res.json();
           if (data && data.length > 0) {
             initialList = data;
+            loadedFromSnapshot = true;
           }
         }
       } catch (e) {
@@ -165,6 +255,7 @@ export default function App() {
           const parsed: StockData[] = JSON.parse(cachedCustom);
           if (parsed && Array.isArray(parsed)) {
             parsed.forEach((customStock) => {
+              if (!customStock || !customStock.ticker || !Array.isArray(customStock.candles)) return;
               const idx = initialList.findIndex((s) => isMatchingTicker(s.ticker, customStock.ticker));
               if (idx >= 0) {
                 initialList[idx] = customStock;
@@ -179,6 +270,11 @@ export default function App() {
       }
 
       if (isMounted) {
+        const fetchedAt = Date.now();
+        initialList.forEach((stock) => {
+          tickerCacheRef.current.set(normalizeStockTicker(stock.ticker), { data: stock, fetchedAt });
+        });
+        if (loadedFromSnapshot) universeFetchedAtRef.current = fetchedAt;
         setStocks(initialList);
 
         // If URL specified a ticker (e.g. /analysis/BBCA), find it or fetch it
@@ -187,7 +283,6 @@ export default function App() {
           if (matchedUrlStock) {
             setSelectedStock(matchedUrlStock);
           } else {
-            // Will fetch below in syncRealData or direct fetch
             const temp = initialList.find((s) => s.ticker === 'BRPT') || initialList[0];
             setSelectedStock(temp);
           }
@@ -196,226 +291,111 @@ export default function App() {
           setSelectedStock(brpt);
         }
         setLoading(false);
+        setTotalTargetCount(initialList.length);
+        setSyncedTickers(initialList.map((stock) => stock.ticker));
+        setSyncProgress(100);
+        setIsSyncComplete(true);
+        setIsSyncModalOpen(false);
       }
 
-      // If opening an analysis route for a stock not in default set, fetch it immediately
       if (initialUrlTicker) {
-        (async () => {
-          try {
-            const { fetchYahooStockData } = await import('./services/yahooFinance');
-            const liveDirect = await fetchYahooStockData(initialUrlTicker);
-            if (isMounted && liveDirect && liveDirect.candles && liveDirect.candles.length > 0) {
-              setStocks((prev) => {
-                const exists = prev.some((s) => isMatchingTicker(s.ticker, liveDirect.ticker));
-                return exists
-                  ? prev.map((s) => (isMatchingTicker(s.ticker, liveDirect.ticker) ? liveDirect : s))
-                  : [liveDirect, ...prev];
-              });
-              setSelectedStock(liveDirect);
-            }
-          } catch (e) {
-            // fallback
-          }
-        })();
+        const liveDirect = await fetchTickerData(initialUrlTicker);
+        if (isMounted && liveDirect) mergeStockIntoState(liveDirect, true);
       }
 
-      // Immediately fetch real live market data for all requested conglomerates, sectors, and watchlist items
-      const syncRealData = async () => {
-        if (!isMounted) return;
-        try {
-          const { fetchYahooStockData } = await import('./services/yahooFinance');
-          const allTargetTickers = Array.from(
-            new Set([
-              // 1. IHSG
-              '^JKSE',
-              // 2. Prajogo Pangestu: CDIA CUAN BREN PTRO TPIA SINI BRPT
-              'CDIA', 'CUAN', 'BREN', 'PTRO', 'TPIA', 'SINI', 'BRPT',
-              // 3. Bakrie: ALII BNBR KOTA MDIA BRMS BUMI DEWA ENRG VKTR JGLE OASA BIPI UNSP VIVA
-              'ALII', 'BNBR', 'KOTA', 'MDIA', 'BRMS', 'BUMI', 'DEWA', 'ENRG', 'VKTR', 'JGLE', 'OASA', 'BIPI', 'UNSP', 'VIVA',
-              // 4. Boy Thohir: MBMA ESSA MDKA AADI ADMR ADRO EMAS
-              'MBMA', 'ESSA', 'MDKA', 'AADI', 'ADMR', 'ADRO', 'EMAS',
-              // 5. Aguan: CBDK ECII ERAA ERAL INPC JIHD PANI
-              'CBDK', 'ECII', 'ERAA', 'ERAL', 'INPC', 'JIHD', 'PANI',
-              // 6. Happy Hapsoro: ARCI BUVA CBRE MINA PADI PSKT RAJA RATU UANG PSAB FORU
-              'ARCI', 'BUVA', 'CBRE', 'MINA', 'PADI', 'PSKT', 'RAJA', 'RATU', 'UANG', 'PSAB', 'FORU',
-              // 7. Perbankan: AGRO ARTO BBYB BGTG BMRI BBCA BBNI BBTN BBRI BRIS BBHI NOBU PNBN PNLF
-              'AGRO', 'ARTO', 'BBYB', 'BGTG', 'BMRI', 'BBCA', 'BBNI', 'BBTN', 'BBRI', 'BRIS', 'BBHI', 'NOBU', 'PNBN', 'PNLF',
-              // 8. BUMN: ANTM GIAA GMFI INCO JSMR KAEF KRAS SMBR SMGR TINS TLKM
-              'ANTM', 'GIAA', 'GMFI', 'INCO', 'JSMR', 'KAEF', 'KRAS', 'SMBR', 'SMGR', 'TINS', 'TLKM',
-              // 9. COAL: BUMI HRUM ITMG PTBA BYAN
-              'HRUM', 'ITMG', 'PTBA', 'BYAN',
-              // 10. HAJI ISSAM: FAST JARR PGUN TEBE
-              'FAST', 'JARR', 'PGUN', 'TEBE',
-              // 11. HASYIM: DOOH INET KETR WIFI
-              'DOOH', 'INET', 'KETR', 'WIFI',
-              // 12. Salim: ICBP LSIP SIMP META INDF AMRT ROTI DNET IMAS IMJS AMMN MEDC
-              'ICBP', 'LSIP', 'SIMP', 'META', 'INDF', 'AMRT', 'ROTI', 'DNET', 'IMAS', 'IMJS', 'AMMN', 'MEDC',
-              // 13. Internet: MORA IRSX PADA
-              'MORA', 'IRSX', 'PADA',
-              // 14. Logistik dan perkapalan: SOCI BULL GTSI HUMI LEAD
-              'SOCI', 'BULL', 'GTSI', 'HUMI', 'LEAD',
-              // Additional liquid stocks from database
-              ...liquidIDXStocks.map((s) => (s.t === 'IHSG' ? '^JKSE' : s.t)),
-              // Watchlist items (normalizing any variations)
-              ...watchlist.map((w) =>
-                w === 'GMFFI' ? 'GMFI' : w === 'PADDI' ? 'PADI' : w === 'IHSG' ? '^JKSE' : w.trim().toUpperCase()
-              ),
-            ])
-          );
-
-          setTotalTargetCount(allTargetTickers.length);
-
-          let completedCount = 0;
-          const batchSize = 6;
-
-          for (let i = 0; i < allTargetTickers.length; i += batchSize) {
-            if (!isMounted) break;
-            const chunk = allTargetTickers.slice(i, i + batchSize);
-
-            await Promise.allSettled(
-              chunk.map(async (t) => {
-                try {
-                  if (isMounted) setCurrentProcessingTicker(t);
-                  const live = await fetchYahooStockData(t);
-                  completedCount++;
-
-                  if (isMounted && live && live.candles && live.candles.length > 0) {
-                    setStocks((prev) => {
-                      const exists = prev.some((s) => isMatchingTicker(s.ticker, live.ticker));
-                      const updated = exists
-                        ? prev.map((s) => (isMatchingTicker(s.ticker, live.ticker) ? live : s))
-                        : [live, ...prev];
-
-                      try {
-                        const toCache = updated.filter((s) => s.isRealData);
-                        localStorage.setItem('smc_custom_stocks', JSON.stringify(toCache));
-                      } catch (e) {}
-
-                      return updated;
-                    });
-
-                    setSyncedTickers((prev) => Array.from(new Set([...prev, live.ticker])));
-                    setSelectedStock((curr) => (isMatchingTicker(curr?.ticker, live.ticker) ? live : curr));
-                  }
-
-                  if (isMounted) {
-                    const rawProg = (completedCount / allTargetTickers.length) * 100;
-                    setSyncProgress(Math.min(98, Math.round(rawProg)));
-                  }
-                } catch (err) {
-                  completedCount++;
-                }
-              })
-            );
-          }
-
-          if (isMounted) {
-            setSyncProgress(100);
-            setIsSyncComplete(true);
-            // Smoothly auto-close after 600ms
-            setTimeout(() => {
-              if (isMounted) {
-                setIsSyncModalOpen(false);
-              }
-            }, 600);
-          }
-        } catch (e) {
-          if (isMounted) {
-            setIsSyncComplete(true);
-            setIsSyncModalOpen(false);
-          }
-        }
-      };
-
-      // Run live real sync immediately
-      syncRealData();
     }
+    void loadStocks();
 
-    const cleanupPromise = loadStocks();
-
-    // Re-sync with server periodically without overwriting real stock data
-    const interval = setInterval(async () => {
-      if (!isMounted) return;
+    const refreshUniverse = async () => {
+      if (!isMounted || document.visibilityState !== 'visible') return;
+      if (Date.now() - universeFetchedAtRef.current < 15 * 60 * 1000) return;
       try {
         const res = await fetch('/api/stocks');
-        if (res.ok) {
-          const freshData: StockData[] = await res.json();
-          if (isMounted && freshData && freshData.length > 0) {
-            setStocks((prev) => {
-              const updated = [...prev];
-              freshData.forEach((incoming) => {
-                const idx = updated.findIndex((s) => isMatchingTicker(s.ticker, incoming.ticker));
-                if (idx >= 0) {
-                  const existing = updated[idx];
-                  // Never overwrite real data with mock fallback data
-                  if (existing.isRealData && !incoming.isRealData) {
-                    return;
-                  }
-                  updated[idx] = incoming;
-                } else {
-                  updated.push(incoming);
-                }
-              });
-              return updated;
-            });
-
-            setSelectedStock((curr) => {
-              if (!curr) return freshData[0];
-              const match = freshData.find((s) => isMatchingTicker(s.ticker, curr.ticker));
-              if (match) {
-                if (curr.isRealData && !match.isRealData) {
-                  return curr; // Keep real data
-                }
-                return match;
-              }
-              return curr;
-            });
-          }
-        }
-      } catch (e) {
-        // silent continue
+        if (!res.ok) return;
+        const freshData: StockData[] = await res.json();
+        if (!isMounted || !Array.isArray(freshData) || freshData.length === 0) return;
+        universeFetchedAtRef.current = Date.now();
+        freshData.forEach((incoming) => {
+          const key = normalizeStockTicker(incoming.ticker);
+          tickerCacheRef.current.set(key, { data: incoming, fetchedAt: Date.now() });
+        });
+        setStocks((prev) => {
+          const updated = [...prev];
+          freshData.forEach((incoming) => {
+            const idx = updated.findIndex((s) => isMatchingTicker(s.ticker, incoming.ticker));
+            if (idx >= 0) {
+              const existing = updated[idx];
+              if (existing.isRealData && !incoming.isRealData) return;
+              updated[idx] = incoming;
+            } else {
+              updated.push(incoming);
+            }
+          });
+          return updated;
+        });
+      } catch {
+        // Keep the current snapshot when the refresh provider is unavailable.
       }
-    }, 5000);
+    };
 
+    const universeTimer = window.setInterval(refreshUniverse, 15 * 60 * 1000);
+    document.addEventListener('visibilitychange', refreshUniverse);
     return () => {
       isMounted = false;
-      clearInterval(interval);
+      window.clearInterval(universeTimer);
+      document.removeEventListener('visibilitychange', refreshUniverse);
     };
   }, []);
+
+  // Watchlist refresh is lazy, visible-tab only, and capped at three requests.
+  useEffect(() => {
+    if (activeTab !== 'watchlist' || document.visibilityState !== 'visible') return;
+    let isActive = true;
+    let nextIndex = 0;
+    let workersRunning = false;
+    const tickers = Array.from(new Set(watchlist.map(normalizeStockTicker).filter(Boolean)));
+
+    const worker = async () => {
+      while (isActive && document.visibilityState === 'visible' && nextIndex < tickers.length) {
+        const ticker = tickers[nextIndex++];
+        const cached = tickerCacheRef.current.get(ticker);
+        if (cached && Date.now() - cached.fetchedAt < 5 * 60 * 1000) continue;
+        const fresh = await fetchTickerData(ticker);
+        if (isActive && document.visibilityState === 'visible' && fresh) {
+          mergeStockIntoState(fresh);
+        }
+      }
+    };
+
+    const startWorkers = () => {
+      if (workersRunning || !isActive || document.visibilityState !== 'visible') return;
+      workersRunning = true;
+      void Promise.all(Array.from({ length: Math.min(3, tickers.length) }, () => worker())).finally(() => {
+        workersRunning = false;
+      });
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') startWorkers();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    startWorkers();
+    return () => {
+      isActive = false;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [activeTab, watchlist.join(',')]);
 
   const handleSelectStock = async (stock: StockData) => {
     setFetchingTicker(stock.ticker);
     setIsStockFetching(true);
     const minDelay = new Promise((resolve) => setTimeout(resolve, 1200));
     try {
-      let freshRealData: StockData | null = null;
-      try {
-        const res = await fetch(`/api/stock/${encodeURIComponent(stock.ticker)}`);
-        if (res.ok) {
-          freshRealData = await res.json();
-        } else {
-          const res2 = await fetch(`/api/stock?symbol=${encodeURIComponent(stock.ticker)}`);
-          if (res2.ok) {
-            freshRealData = await res2.json();
-          }
-        }
-      } catch (e) {
-        // Fallback to client fetch
-      }
-
-      // If backend API failed or unavailable (e.g. Vercel deployment), fetch client-side with CORS proxy
-      if (!freshRealData) {
-        const { fetchYahooStockData } = await import('./services/yahooFinance');
-        freshRealData = await fetchYahooStockData(stock.ticker);
-      }
+      const freshRealData = await fetchTickerData(stock.ticker);
 
       await minDelay;
 
       if (freshRealData && freshRealData.candles && freshRealData.candles.length > 0) {
-        setSelectedStock(freshRealData);
-        setStocks((prev) =>
-          prev.map((s) => (isMatchingTicker(s.ticker, freshRealData!.ticker) ? freshRealData! : s))
-        );
+        mergeStockIntoState(freshRealData, true);
       } else {
         setSelectedStock(stock);
       }
@@ -427,51 +407,17 @@ export default function App() {
   };
 
   const handleFetchNewStock = async (ticker: string) => {
-    let cleanTicker = ticker.trim().toUpperCase();
-    if (cleanTicker === 'IHSG' || cleanTicker === 'JKSE' || cleanTicker === '^JKSE') {
-      cleanTicker = '^JKSE';
-    }
+    const cleanTicker = normalizeStockTicker(ticker);
     setFetchingTicker(cleanTicker);
     setIsStockFetching(true);
     const minDelay = new Promise((resolve) => setTimeout(resolve, 1200));
     try {
-      let stockData: StockData | null = null;
-      try {
-        const res = await fetch(`/api/stock/${encodeURIComponent(cleanTicker)}`);
-        if (res.ok) {
-          stockData = await res.json();
-        } else {
-          const res2 = await fetch(`/api/stock?symbol=${encodeURIComponent(cleanTicker)}`);
-          if (res2.ok) {
-            stockData = await res2.json();
-          }
-        }
-      } catch (e) {
-        // Fallback to client fetch
-      }
-
-      if (!stockData) {
-        const { fetchYahooStockData } = await import('./services/yahooFinance');
-        stockData = await fetchYahooStockData(cleanTicker);
-      }
+      const stockData = await fetchTickerData(cleanTicker);
 
       await minDelay;
 
       if (stockData && stockData.candles && stockData.candles.length > 0) {
-        setStocks((prev) => {
-          const exists = prev.some((s) => isMatchingTicker(s.ticker, stockData!.ticker));
-          const updated = exists
-            ? prev.map((s) => (isMatchingTicker(s.ticker, stockData!.ticker) ? stockData! : s))
-            : [stockData!, ...prev];
-          
-          try {
-            const toCache = updated.filter((s) => s.isRealData);
-            localStorage.setItem('smc_custom_stocks', JSON.stringify(toCache));
-          } catch (e) {}
-
-          return updated;
-        });
-        setSelectedStock(stockData);
+        mergeStockIntoState(stockData, true);
       }
     } catch (e) {
       console.warn(`Failed fetching stock ${cleanTicker}:`, e);
@@ -532,8 +478,6 @@ export default function App() {
                 window.history.pushState(null, '', '/screener');
               } else if (tab === 'watchlist') {
                 window.history.pushState(null, '', '/watchlist');
-              } else if (tab === 'calculator') {
-                window.history.pushState(null, '', '/calculator');
               } else if (tab === 'landing') {
                 window.history.pushState(null, '', '/');
               }
@@ -685,11 +629,6 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === 'calculator' && (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-            <PositionCalculator />
-          </div>
-        )}
       </main>
 
       {/* Educational Guide Drawer/Modal */}

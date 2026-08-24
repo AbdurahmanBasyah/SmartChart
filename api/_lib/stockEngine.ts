@@ -174,6 +174,33 @@ export function roundToIdxTick(price: number, isIhsg: boolean = false): number {
   return Math.round(price / tick) * tick;
 }
 
+export interface CanonicalCandlePrices {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+export function canonicalizeCandlePrices(
+  open: number,
+  high: number,
+  low: number,
+  close: number,
+  roundPrice: (value: number) => number,
+): CanonicalCandlePrices {
+  const roundedOpen = roundPrice(open);
+  const roundedHigh = roundPrice(high);
+  const roundedLow = roundPrice(low);
+  const roundedClose = roundPrice(close);
+
+  return {
+    open: roundedOpen,
+    high: Math.max(roundedHigh, roundedOpen, roundedClose),
+    low: Math.min(roundedLow, roundedOpen, roundedClose),
+    close: roundedClose,
+  };
+}
+
 export function addIdxTicks(price: number, ticks: number, isIhsg: boolean = false): number {
   let current = Math.max(1, Math.round(price));
   if (isIhsg) {
@@ -535,66 +562,66 @@ export function detectPriceGaps(candles: Candle[]): PriceGap[] {
     const prev = candles[i - 1];
     const curr = candles[i];
 
-    if (curr.low > prev.close) {
-      const top = Math.round(curr.low);
-      const bottom = Math.round(prev.close);
+    if (curr.open > prev.close) {
+      const bottom = prev.close;
+      const initialTop = curr.open;
+      let minimumReachedLow = initialTop;
 
-      if (top > bottom) {
-        let mitigated = false;
-        let endIndex = candles.length - 1;
-
-        for (let j = i + 1; j < candles.length; j++) {
-          if (candles[j].low <= bottom) {
-            mitigated = true;
-            endIndex = j;
-            break;
-          }
+      for (let j = i; j < candles.length; j++) {
+        if (candles[j].low < initialTop) {
+          minimumReachedLow = Math.min(
+            minimumReachedLow,
+            Math.max(bottom, candles[j].low),
+          );
         }
+      }
 
+      const top = Math.min(initialTop, minimumReachedLow);
+      if (top > bottom) {
         gaps.push({
           id: `gap-bull-${i}`,
           type: 'bullish',
           top,
           bottom,
           startIndex: i - 1,
-          endIndex: mitigated ? endIndex : candles.length - 1,
-          mitigated,
+          endIndex: candles.length - 1,
+          mitigated: false,
           time: curr.time,
         });
       }
     }
 
-    if (curr.high < prev.close) {
-      const top = Math.round(prev.close);
-      const bottom = Math.round(curr.high);
+    if (curr.open < prev.close) {
+      const initialBottom = curr.open;
+      const top = prev.close;
+      let maximumReachedHigh = initialBottom;
 
-      if (top > bottom) {
-        let mitigated = false;
-        let endIndex = candles.length - 1;
-
-        for (let j = i + 1; j < candles.length; j++) {
-          if (candles[j].high >= top) {
-            mitigated = true;
-            endIndex = j;
-            break;
-          }
+      for (let j = i; j < candles.length; j++) {
+        if (candles[j].high > initialBottom) {
+          maximumReachedHigh = Math.max(
+            maximumReachedHigh,
+            Math.min(top, candles[j].high),
+          );
         }
+      }
 
+      const bottom = Math.max(initialBottom, maximumReachedHigh);
+      if (bottom < top) {
         gaps.push({
           id: `gap-bear-${i}`,
           type: 'bearish',
           top,
           bottom,
           startIndex: i - 1,
-          endIndex: mitigated ? endIndex : candles.length - 1,
-          mitigated,
+          endIndex: candles.length - 1,
+          mitigated: false,
           time: curr.time,
         });
       }
     }
   }
 
-  return gaps.filter((g) => !g.mitigated);
+  return gaps;
 }
 
 export function detectOrderBlocks(
@@ -780,6 +807,48 @@ export function determineMarketStructure(candles: Candle[], swings: SwingPoint[]
   return 'SIDEWAYS';
 }
 
+interface PriorTappedZone {
+  type: 'ORDER_BLOCK' | 'FVG' | 'GAP';
+  top: number;
+  bottom: number;
+}
+
+function findPriorTappedBullishZone(candles: Candle[], isIhsg: boolean): PriorTappedZone | null {
+  if (candles.length < 2) return null;
+
+  const lastIndex = candles.length - 1;
+  const previousCandle = candles[lastIndex - 1];
+  const lastCandle = candles[lastIndex];
+  const priorCandles = candles.slice(0, -1);
+  const priorSwings = detectSwings(priorCandles);
+  const priorBosLines = detectBosChoch(priorCandles, priorSwings);
+  const priorFvgs = detectFVGs(priorCandles, isIhsg)
+    .filter((zone) => zone.type === 'bullish' && !zone.mitigated);
+  const priorOrderBlocks = detectOrderBlocks(
+    priorCandles,
+    priorSwings,
+    priorBosLines,
+    priorFvgs,
+    calculateVolumeMA(priorCandles, 20),
+  ).filter((zone) => zone.type === 'bullish' && !zone.mitigated);
+  const priorGaps = detectPriceGaps(priorCandles)
+    .filter((zone) => zone.type === 'bullish' && !zone.mitigated);
+  const candidates: PriorTappedZone[] = [
+    ...priorOrderBlocks.map((zone) => ({ type: 'ORDER_BLOCK' as const, top: zone.top, bottom: zone.bottom })),
+    ...priorFvgs.map((zone) => ({ type: 'FVG' as const, top: zone.top, bottom: zone.bottom })),
+    ...priorGaps.map((zone) => ({ type: 'GAP' as const, top: zone.top, bottom: zone.bottom })),
+  ];
+
+  return candidates.find(
+    (zone) =>
+      previousCandle.close > zone.top &&
+      lastCandle.open > zone.top &&
+      lastCandle.low <= zone.top &&
+      lastCandle.high >= zone.bottom &&
+      lastCandle.close > zone.top,
+  ) || null;
+}
+
 export function generateRecommendation(
   symbol: string,
   name: string,
@@ -962,14 +1031,22 @@ export function generateRecommendation(
   const isOnBuyArea = hasConfirmedPoi && currentPrice >= entryMin && currentPrice <= entryMax;
   const isNearEntry = hasConfirmedPoi && !isBreakoutRising && currentPrice > entryMax && currentPrice <= entryMax * 1.03;
 
+  const tappedZone = lastCandle
+    ? findPriorTappedBullishZone(candles, isIhsg)
+    : null;
+  const isRecentTappedPoi = Boolean(tappedZone);
+
   let status: TradeRecommendation['status'] = 'WAIT_PULLBACK_FVG';
 
-  if (isOnBuyArea && volumeConfirmation) {
+  if (isRecentTappedPoi) {
+    status = 'TAPPED_POI_REBOUND';
+    reasoning.unshift(
+      `TAPPED POI REBOUND: Low Rp ${lastCandle?.low.toLocaleString()} retraced from above into active ${tappedZone?.type} Rp ${tappedZone?.bottom.toLocaleString()} - ${tappedZone?.top.toLocaleString()} and closed at Rp ${lastCandle?.close.toLocaleString()} above the zone.`,
+    );
+  } else if (isOnBuyArea && volumeConfirmation) {
     status = 'STRONG_BUY_POI';
   } else if (isOnBuyArea) {
     status = 'ON_BUY_AREA';
-  } else if (currentPrice < entryMin && currentPrice >= entryMin * 0.95) {
-    status = 'TAPPED_POI_REBOUND';
   } else if (isBreakoutRising || !hasConfirmedPoi || (currentPrice > entryMax * 1.08 && !activeBullFvgs.some(f => f.top >= currentPrice * 0.90))) {
     status = 'WAIT_FVG_CREATION';
   } else if (isNearEntry) {
@@ -1383,6 +1460,8 @@ export async function fetchYahooStockDataServer(ticker: string): Promise<StockDa
     }
 
     const todayDateStr = formatJakartaDate(new Date());
+    const isIhsg = cleanTicker === '^JKSE';
+    const roundPrice = (price: number) => isIhsg ? Math.round(price) : roundToIdxTick(price, false);
     const candles: Candle[] = [];
     const seenDates = new Set<string>();
 
@@ -1403,12 +1482,10 @@ export async function fetchYahooStockDataServer(ticker: string): Promise<StockDa
 
       if (!seenDates.has(dateStr)) {
         seenDates.add(dateStr);
+        const canonical = canonicalizeCandlePrices(open, high, low, close, roundPrice);
         candles.push({
           time: dateStr,
-          open: Math.round(open),
-          high: Math.round(high),
-          low: Math.round(low),
-          close: Math.round(close),
+          ...canonical,
           volume: Math.max(1000, Math.round(volume)),
         });
       }

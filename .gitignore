@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Keep internal project/agent documentation local and private.
+# README.md remains the public repository entry point.
+*.md
+!README.md

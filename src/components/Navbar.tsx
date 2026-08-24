@@ -5,7 +5,6 @@ import {
   Search,
   Filter,
   BarChart2,
-  Calculator,
   BookOpen,
   Zap,
   Activity,
@@ -20,8 +19,8 @@ import { StockData } from '../types';
 import { SmartMoneyIcon } from './SmartMoneyIcon';
 
 interface NavbarProps {
-  activeTab: 'landing' | 'chart' | 'inventory' | 'screener' | 'guide' | 'calculator' | 'watchlist';
-  setActiveTab: (tab: 'landing' | 'chart' | 'inventory' | 'screener' | 'guide' | 'calculator' | 'watchlist') => void;
+  activeTab: 'landing' | 'chart' | 'inventory' | 'screener' | 'guide' | 'watchlist';
+  setActiveTab: (tab: 'landing' | 'chart' | 'inventory' | 'screener' | 'guide' | 'watchlist') => void;
   stocks: StockData[];
   selectedStock: StockData | null;
   onSelectStock: (stock: StockData) => void;
@@ -356,18 +355,6 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
 
           <button
-            onClick={() => setActiveTab('calculator')}
-            className={`px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
-              activeTab === 'calculator'
-                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 shadow-lg shadow-emerald-500/10'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-            }`}
-          >
-            <Calculator className="w-4 h-4" />
-            <span className="hidden lg:inline">Risk Calculator</span>
-          </button>
-
-          <button
             onClick={() => setActiveTab('guide')}
             className={`px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
               activeTab === 'guide'
@@ -555,25 +542,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <div className="flex items-center gap-2.5">
                     <Star className="w-4 h-4 text-amber-400 fill-amber-400" />
                     <span>Watchlist ({watchlistCount})</span>
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-slate-600" />
-                </motion.button>
-
-                <motion.button
-                  initial={{ y: 20, opacity: 0 }}
-                  animate={{ y: 0, opacity: 1 }}
-                  transition={{ delay: 0.35, type: 'spring', stiffness: 220, damping: 20 }}
-                  onClick={() => {
-                    setActiveTab('calculator');
-                    setIsMobileMenuOpen(false);
-                  }}
-                  className={`w-full p-3 rounded-xl text-left font-bold text-xs flex items-center justify-between cursor-pointer active:scale-[0.98] transition-all ${
-                    activeTab === 'calculator' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-lg shadow-emerald-500/10' : 'text-slate-300 hover:bg-slate-900'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <Calculator className="w-4 h-4 text-teal-400" />
-                    <span>Position Risk Calculator</span>
                   </div>
                   <ChevronRight className="w-4 h-4 text-slate-600" />
                 </motion.button>

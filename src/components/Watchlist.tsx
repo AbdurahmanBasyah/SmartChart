@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion } from 'motion/react';
 import {
   Star,
   Trash2,
@@ -49,6 +50,7 @@ export const Watchlist: React.FC<WatchlistProps> = ({
 }) => {
   const [addTickerInput, setAddTickerInput] = useState('');
   const [isAdding, setIsAdding] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
 
   // Find tickers in watchlist that are already loaded in `stocks`
   const watchlistStocks = watchlist
@@ -71,6 +73,15 @@ export const Watchlist: React.FC<WatchlistProps> = ({
 
   watchlistStocks.sort((a, b) => getSmcSignalPriorityScore(a) - getSmcSignalPriorityScore(b));
 
+  const pageSize = 9;
+  const totalPages = Math.max(1, Math.ceil(watchlistStocks.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedWatchlistStocks = watchlistStocks.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [watchlist.join(','), stocks.length]);
+
   const onBuyAreaCount = watchlistStocks.filter(
     (s) => s.recommendation?.isOnBuyArea || s.recommendation?.status === 'ON_BUY_AREA'
   ).length;
@@ -92,7 +103,12 @@ export const Watchlist: React.FC<WatchlistProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <motion.div
+      initial={{ opacity: 0, y: 14 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, ease: 'easeOut' }}
+      className="space-y-6"
+    >
       {/* Top Banner & Stats */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-2xl relative overflow-hidden">
         <div className="absolute top-0 right-0 w-96 h-96 bg-amber-500/5 rounded-full blur-3xl pointer-events-none" />
@@ -228,7 +244,7 @@ export const Watchlist: React.FC<WatchlistProps> = ({
             </div>
           ))}
 
-          {watchlistStocks.map((stock) => {
+          {paginatedWatchlistStocks.map((stock) => {
             const rec = stock.recommendation;
             const entryMin = rec?.entryZone?.[0] ?? 0;
             const entryMax = rec?.entryZone?.[1] ?? 0;
@@ -375,6 +391,33 @@ export const Watchlist: React.FC<WatchlistProps> = ({
           })}
         </div>
       )}
-    </div>
+
+      {watchlistStocks.length > pageSize && (
+        <div className="flex items-center justify-between gap-3 text-xs font-mono text-slate-400">
+          <span>
+            Menampilkan {(safePage - 1) * pageSize + 1}-{Math.min(safePage * pageSize, watchlistStocks.length)} dari {watchlistStocks.length} saham
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+              disabled={safePage <= 1}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-700 hover:border-amber-500/50 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              Sebelumnya
+            </button>
+            <span className="text-slate-300">{safePage}/{totalPages}</span>
+            <button
+              type="button"
+              onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+              disabled={safePage >= totalPages}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-700 hover:border-amber-500/50 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              Berikutnya
+            </button>
+          </div>
+        </div>
+      )}
+    </motion.div>
   );
 };
