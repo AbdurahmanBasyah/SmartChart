@@ -45,6 +45,7 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
   const [showFvg, setShowFvg] = useState(true);
   const [showGaps, setShowGaps] = useState(true);
   const [showLiquidity, setShowLiquidity] = useState(true);
+  const [showStructure, setShowStructure] = useState(true);
   const [showSupportResistance, setShowSupportResistance] = useState(true);
   const [showRiskRewardBox, setShowRiskRewardBox] = useState(true);
 
@@ -491,6 +492,47 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
       });
     }
 
+    // --- DRAW CONFIRMED BOS / CHoCH STRUCTURE LINES ---
+    if (showStructure && stock?.bosChochLines) {
+      (stock.bosChochLines || [])
+        .filter((line) => line.endIndex >= startIndex && line.startIndex < endIndex)
+        .forEach((line, lineIndex) => {
+          const visibleStartX = Math.max(paddingLeft, getX(line.startIndex));
+          const visibleEndX = Math.min(width - paddingRight, getX(line.endIndex));
+          const y = getY(line.price);
+
+          if (visibleEndX < paddingLeft || visibleStartX > width - paddingRight || visibleEndX < visibleStartX || y < paddingTop - 2 || y > paddingTop + priceChartHeight + 2) {
+            return;
+          }
+
+          const lineColor = line.type === 'BOS' ? '#38bdf8' : '#fbbf24';
+          ctx.save();
+          ctx.strokeStyle = lineColor;
+          ctx.lineWidth = 1.4;
+          ctx.setLineDash([6, 4]);
+          ctx.beginPath();
+          ctx.moveTo(visibleStartX, y);
+          ctx.lineTo(visibleEndX, y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Keep horizontal position deterministic at the midpoint of the visible clipped segment.
+          // A 60px minimum avoids label overflow while preserving the line itself on narrow segments.
+          if (visibleEndX - visibleStartX >= 60) {
+            ctx.fillStyle = lineColor;
+            ctx.font = 'bold 9px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            const labelX = (visibleStartX + visibleEndX) / 2;
+            ctx.fillText(
+              `${line.label} ${line.direction === 'bullish' ? '↑' : '↓'}`,
+              labelX,
+              y + (lineIndex % 2 === 0 ? -7 : 11),
+            );
+          }
+          ctx.restore();
+        });
+    }
+
     // --- DRAW LIQUIDITY SWEEPS ---
     if (showLiquidity && stock?.liquiditySweeps) {
       (stock.liquiditySweeps || []).forEach((sweep) => {
@@ -853,6 +895,7 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
     showFvg,
     showGaps,
     showLiquidity,
+    showStructure,
     showSupportResistance,
     showRiskRewardBox,
     hoveredCandle,
@@ -1280,6 +1323,16 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
             >
               OrderBlock
             </button>
+
+            <button
+              onClick={() => setShowStructure(!showStructure)}
+              className={`px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer ${
+                showStructure ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30' : 'text-slate-500'
+              }`}
+              title="Toggle confirmed BOS / CHoCH structure lines"
+            >
+              Structure
+            </button>
           </div>
 
           {/* Trendline Drawing Tool (Icon Only without "Tambah Garis" text) */}
@@ -1443,11 +1496,11 @@ export const SmcCanvasChart: React.FC<SmcCanvasChartProps> = ({
             <span>Order Block (POI)</span>
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-3 h-0.5 bg-amber-400 inline-block" />
+            <span className="w-3 h-0.5 bg-amber-400 border-t border-dashed border-amber-200 inline-block" />
             <span>CHoCH</span>
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-3 h-0.5 bg-sky-400 inline-block" />
+            <span className="w-3 h-0.5 bg-sky-400 border-t border-dashed border-sky-200 inline-block" />
             <span>BOS</span>
           </span>
           <span className="flex items-center gap-1.5">

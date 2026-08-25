@@ -4,6 +4,7 @@ import { Navbar } from './components/Navbar';
 import { ParallaxHero } from './components/ParallaxHero';
 import { SmcCanvasChart } from './components/SmcCanvasChart';
 import { RecommendationPanel } from './components/RecommendationPanel';
+import { NaraSummaryPanel } from './components/NaraSummaryPanel';
 import { StockScreener } from './components/StockScreener';
 import { Watchlist } from './components/Watchlist';
 import { InventoryChart } from './components/InventoryChart';
@@ -586,6 +587,11 @@ export default function App() {
                   onTimeframeChange={setTimeframe}
                   isWatchlisted={watchlist.includes(selectedStock.ticker.toUpperCase())}
                   onToggleWatchlist={handleToggleWatchlist}
+                />
+
+                <NaraSummaryPanel
+                  summary={selectedStock.naraSummary}
+                  variant="CHART"
                 />
 
                 {/* Smart Money Trade Plan & Recommendation Panel */}

@@ -30,12 +30,14 @@ import {
     BrokerInventorySummary,
     BrokerDailyPoint,
 } from "../types";
+import { buildInventoryNaraSummary } from "../utils/naraEvidenceEngine";
 import {
     IDX_BROKER_CATALOG,
     searchExchangeMemberBrokers,
 } from "../utils/brokerInventoryEngine";
 import { sortBrokerInventoryRows } from "../utils/brokerSummarySorting";
 import { DualCalendarPicker } from "./DualCalendarPicker";
+import { NaraSummaryPanel } from "./NaraSummaryPanel";
 
 interface InventoryChartProps {
     stocks: StockData[];
@@ -113,6 +115,29 @@ function normalizeDate(value: unknown): string {
     return String(value || "").trim().slice(0, 10);
 }
 
+function isValidIsoDate(value: string): boolean {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const [year, month, day] = value.split("-").map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year
+        && date.getUTCMonth() === month - 1
+        && date.getUTCDate() === day;
+}
+
+function normalizeProviderRange(startValue: unknown, endValue: unknown): {
+    start: string;
+    end: string;
+    complete: boolean;
+} {
+    const start = normalizeDate(startValue);
+    const end = normalizeDate(endValue);
+    return {
+        start,
+        end,
+        complete: Boolean(start && end && isValidIsoDate(start) && isValidIsoDate(end)),
+    };
+}
+
 function createEmptyInventorySummary(
     ticker: string,
     stock: StockData | null | undefined,
@@ -145,6 +170,23 @@ function createEmptyInventorySummary(
             foreignNetVal: 0,
             cleanAccumBrokerCount: 0,
             cleanDistBrokerCount: 0,
+        },
+        coverage: {
+            normalizedTicker: ticker.replace(".JK", "").toUpperCase(),
+            requestedStartDate: startDate,
+            requestedEndDate: endDate,
+            source: "UNKNOWN",
+            selectedBrokerCodes: [],
+            summaryBrokerCount: 0,
+            accumulationBrokerCount: 0,
+            validSeriesPointCount: 0,
+            intersectionPointCount: 0,
+            missingRequestedDates: candles.map((candle) => normalizeDate(candle.time)),
+            missingReason: "REAL_BROKER_DATA_UNAVAILABLE",
+            summaryValid: false,
+            accumulationValid: false,
+            rangeMatches: false,
+            sourceSnapshotKey: "broker-summary+broker-accumulation",
         },
     };
 }
@@ -185,7 +227,7 @@ function buildDailyPoints(series: BrokerDataAccumulationSeries): BrokerDailyPoin
         });
 }
 
-function buildBrokerDataInventorySummary(
+export function buildBrokerDataInventorySummary(
     summaryPayload: BrokerDataSummaryPayload | null,
     accumulationPayload: BrokerDataAccumulationPayload | null,
     fallback: BrokerInventorySummary,
@@ -312,6 +354,72 @@ function buildBrokerDataInventorySummary(
     const foreignBrokers = allBrokers.filter(
         (broker) => broker.type === "FOREIGN",
     );
+    const normalizedFallbackTicker = fallback.ticker.replace(".JK", "").toUpperCase();
+    const normalizedSummaryTicker = normalizeBrokerCode(summaryPayload?.stock_code || normalizedFallbackTicker).replace(".JK", "");
+    const normalizedAccumulationTicker = normalizeBrokerCode(accumulationPayload?.code || normalizedFallbackTicker).replace(".JK", "");
+    const summaryTickerMatches = normalizedSummaryTicker === normalizedFallbackTicker;
+    const accumulationTickerMatches = normalizedAccumulationTicker === normalizedFallbackTicker;
+    const tickerMatches = summaryTickerMatches && accumulationTickerMatches;
+    const summaryRange = normalizeProviderRange(
+        summaryPayload?.broker_start_date,
+        summaryPayload?.broker_end_date,
+    );
+    const accumulationRange = normalizeProviderRange(
+        accumulationPayload?.start_date,
+        accumulationPayload?.end_date,
+    );
+    const requestedStartDate = normalizeDate(fallback.startDate);
+    const requestedEndDate = normalizeDate(fallback.endDate);
+    const summaryRangeMatches = summaryRange.complete
+        && summaryRange.start === requestedStartDate
+        && summaryRange.end === requestedEndDate;
+    const accumulationRangeMatches = accumulationRange.complete
+        && accumulationRange.start === requestedStartDate
+        && accumulationRange.end === requestedEndDate;
+    const endpointRangeMatches = summaryRange.complete
+        && accumulationRange.complete
+        && summaryRange.start === accumulationRange.start
+        && summaryRange.end === accumulationRange.end;
+    const rangeMatches = summaryRangeMatches && accumulationRangeMatches && endpointRangeMatches;
+    const candleDates = new Set(fallback.candles.map((candle) => normalizeDate(candle.time)));
+    const validSeriesPointCount = Array.from(seriesByCode.values()).reduce(
+        (sum, entry) => sum + entry.points.filter((point) => Boolean(point.date)).length,
+        0,
+    );
+    const intersectionPointCount = Array.from(seriesByCode.values()).reduce(
+        (sum, entry) => sum + entry.points.filter((point) => candleDates.has(point.date)).length,
+        0,
+    );
+    const providerDates = new Set(
+        Array.from(seriesByCode.values()).flatMap((entry) => entry.points.map((point) => point.date)),
+    );
+    const missingRequestedDates = Array.from(candleDates)
+        .filter((date) => !providerDates.has(date))
+        .sort();
+    const summaryValid = Boolean(summaryPayload && rowByCode.size > 0 && summaryTickerMatches && summaryRangeMatches);
+    const accumulationValid = Boolean(accumulationPayload && validSeriesPointCount > 0 && accumulationTickerMatches && accumulationRangeMatches);
+    const coverageReasons: string[] = [];
+    if (!summaryRange.complete) {
+        coverageReasons.push("BROKER_SUMMARY_RANGE_MISSING");
+    } else if (!summaryRangeMatches) {
+        coverageReasons.push("BROKER_SUMMARY_RANGE_MISMATCH");
+    }
+    if (!accumulationRange.complete) {
+        coverageReasons.push("BROKER_ACCUMULATION_RANGE_MISSING");
+    } else if (!accumulationRangeMatches) {
+        coverageReasons.push("BROKER_ACCUMULATION_RANGE_MISMATCH");
+    }
+    if (summaryRange.complete && accumulationRange.complete && !endpointRangeMatches) {
+        coverageReasons.push("BROKER_ENDPOINT_RANGE_MISMATCH");
+    }
+    if (!tickerMatches) coverageReasons.push("TICKER_MISMATCH");
+    if (!summaryValid || !accumulationValid) coverageReasons.push("SUMMARY_OR_ACCUMULATION_INCOMPLETE");
+    if (summaryValid && accumulationValid && missingRequestedDates.length > 0) {
+        coverageReasons.push("PROVIDER_DATES_MISSING_NO_ZERO_FILL");
+    }
+    const missingReason = Array.from(new Set(coverageReasons)).join("|") || undefined;
+    const commonReturnedStartDate = rangeMatches ? summaryRange.start : undefined;
+    const commonReturnedEndDate = rangeMatches ? summaryRange.end : undefined;
 
     return {
         ...fallback,
@@ -326,12 +434,12 @@ function buildBrokerDataInventorySummary(
               : "External histori broker (summary tidak tersedia)",
         sourceNote:
             "Data broker dan histori berasal dari provider eksternal; titik tanpa candle yang cocok tidak digambar.",
-        startDate: summaryPayload?.broker_start_date || accumulationPayload?.start_date || fallback.startDate,
-        endDate: summaryPayload?.broker_end_date || accumulationPayload?.end_date || fallback.endDate,
+        startDate: commonReturnedStartDate || fallback.startDate,
+        endDate: commonReturnedEndDate || fallback.endDate,
         topNetBuyers: finalizedBuyers,
         topNetSellers: finalizedSellers,
         allBrokers: finalizedBrokers,
-        autoSelectedBrokerCodes: Array.from(autoCodes),
+        autoSelectedBrokerCodes: Array.from(autoCodes).sort(),
         stats: {
             totalVolumeLots: allBrokers.reduce(
                 (sum, broker) => sum + broker.totalBuyVol + broker.totalSellVol,
@@ -355,6 +463,31 @@ function buildBrokerDataInventorySummary(
             cleanDistBrokerCount: allBrokers.filter(
                 (broker) => broker.cleanTendency === "CLEAN_DIST",
             ).length,
+        },
+        coverage: {
+            normalizedTicker: normalizedFallbackTicker,
+            requestedStartDate: fallback.startDate,
+            requestedEndDate: fallback.endDate,
+            returnedStartDate: commonReturnedStartDate,
+            returnedEndDate: commonReturnedEndDate,
+            summaryReturnedStartDate: summaryRange.start || undefined,
+            summaryReturnedEndDate: summaryRange.end || undefined,
+            accumulationReturnedStartDate: accumulationRange.start || undefined,
+            accumulationReturnedEndDate: accumulationRange.end || undefined,
+            rangeMatches,
+            retrievedAt: new Date().toISOString(),
+            source: "EXTERNAL",
+            brokerLimit: 20,
+            selectedBrokerCodes: Array.from(autoCodes).sort(),
+            summaryBrokerCount: rows.length,
+            accumulationBrokerCount: series.length,
+            validSeriesPointCount,
+            intersectionPointCount,
+            missingRequestedDates,
+            missingReason,
+            summaryValid,
+            accumulationValid,
+            sourceSnapshotKey: "broker-summary+broker-accumulation",
         },
     };
 }
@@ -547,6 +680,37 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
         inventoryData.autoSelectedBrokerCodes,
         customActiveBrokers,
     ]);
+
+    const inventoryNaraSummary = useMemo(
+        () => buildInventoryNaraSummary({
+            summary: {
+                ...inventoryData,
+                coverage: inventoryData.coverage
+                    ? { ...inventoryData.coverage, selectedBrokerCodes: [...activeBrokerCodes].sort() }
+                    : inventoryData.coverage,
+            },
+            candles: inventoryData.candles,
+            selectedBrokerCodes: activeBrokerCodes,
+            asOfDate: endDateStr,
+        }),
+        [inventoryData, activeBrokerCodes, endDateStr],
+    );
+
+    const inventoryNaraMeta = useMemo(() => {
+        const selected = new Set(activeBrokerCodes.map((code) => code.toUpperCase()));
+        const selectedPoints = inventoryData.allBrokers
+            .filter((broker) => selected.has(broker.brokerCode.toUpperCase()))
+            .flatMap((broker) => broker.dailyPoints);
+        const candleDates = new Set(inventoryData.candles.map((candle) => normalizeDate(candle.time)));
+        return {
+            selectedBrokerCount: selected.size,
+            requestedStartDate: inventoryData.startDate,
+            requestedEndDate: inventoryData.endDate,
+            validPointCount: selectedPoints.filter((point) => candleDates.has(normalizeDate(point.date))).length,
+            missingDateCount: inventoryData.coverage?.missingRequestedDates.length || 0,
+            source: inventoryData.coverage?.source || inventoryData.dataSource || "UNKNOWN",
+        };
+    }, [inventoryData, activeBrokerCodes]);
 
     // Toggle broker visibility
     const handleToggleBroker = (code: string) => {
@@ -1490,6 +1654,13 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
                                 </span>
                             )}
                         </div>
+
+                        <NaraSummaryPanel
+                            summary={inventoryNaraSummary}
+                            variant="INVENTORY"
+                            loading={isBrokerApiLoading}
+                            inventoryMeta={inventoryNaraMeta}
+                        />
 
                         {/* PERMANENT FIXED-HEIGHT HOVER & DAILY RIBBON (GLITCH FIX: ZERO LAYOUT SHIFT) */}
                         <div className="min-h-[46px] bg-slate-950/95 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono flex flex-wrap items-center justify-between gap-2 shadow-inner">

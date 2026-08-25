@@ -1,5 +1,8 @@
 // Self-contained Stock Data & Smart Money Concept (SMC) Engine for Vercel Serverless & Node Express API
 
+import type { NaraSummary } from '../../src/types';
+import { buildChartNaraSummary } from '../../src/utils/naraEvidenceEngine';
+
 export interface Candle {
   time: string; // YYYY-MM-DD
   open: number;
@@ -50,6 +53,9 @@ export interface OrderBlock {
   mitigated: boolean;
   time: string;
   volumeSpike: boolean;
+  structureConfirmation: 'BOS' | 'CHOCH' | 'NONE';
+  structureLineId?: string;
+  formationIndex: number;
 }
 
 export interface LiquiditySweep {
@@ -147,6 +153,7 @@ export interface StockData {
   change24h: number;
   changePercent24h: number;
   isRealData?: boolean;
+  naraSummary?: NaraSummary;
 }
 
 export interface StockRawConfig {
@@ -307,7 +314,10 @@ export function detectSwings(candles: Candle[], lookback: number = 3): SwingPoin
   const swings: SwingPoint[] = [];
   if (!candles || candles.length < lookback * 2 + 1) return swings;
 
-  for (let i = lookback; i < candles.length - lookback; i++) {
+  let previousHigh: SwingPoint | null = null;
+  let previousLow: SwingPoint | null = null;
+
+  for (let i = lookback; i <= candles.length - lookback - 1; i++) {
     const currentHigh = candles[i].high;
     const currentLow = candles[i].low;
 
@@ -321,152 +331,126 @@ export function detectSwings(candles: Candle[], lookback: number = 3): SwingPoin
     }
 
     if (isHigh) {
-      const prevHigh = swings.filter((s) => s.type === 'HH' || s.type === 'LH').pop();
-      const type: 'HH' | 'LH' = !prevHigh || currentHigh > prevHigh.price ? 'HH' : 'LH';
-      swings.push({
+      const swing: SwingPoint = {
         index: i,
         time: candles[i].time,
         price: currentHigh,
-        type,
-      });
-    } else if (isLow) {
-      const prevLow = swings.filter((s) => s.type === 'HL' || s.type === 'LL').pop();
-      const type: 'HL' | 'LL' = !prevLow || currentLow > prevLow.price ? 'HL' : 'LL';
-      swings.push({
+        type: !previousHigh || currentHigh > previousHigh.price ? 'HH' : 'LH',
+      };
+      swings.push(swing);
+      previousHigh = swing;
+    }
+
+    if (isLow) {
+      const swing: SwingPoint = {
         index: i,
         time: candles[i].time,
         price: currentLow,
-        type,
-      });
+        type: !previousLow ? 'LL' : currentLow > previousLow.price ? 'HL' : 'LL',
+      };
+      swings.push(swing);
+      previousLow = swing;
     }
   }
 
   return swings;
 }
 
+const SWING_LOOKBACK = 3;
+
 export function detectBosChoch(candles: Candle[], swings: SwingPoint[]): BosChochLine[] {
   const lines: BosChochLine[] = [];
   if (!candles || candles.length < 2 || !swings || swings.length === 0) return lines;
 
-  const sortedSwings = [...swings].sort((a, b) => a.index - b.index);
-  let marketTrend: 'BULLISH' | 'BEARISH' = 'BULLISH';
-  let activeHH: SwingPoint | null = null;
-  let activeHL: SwingPoint | null = null;
-  let activeLL: SwingPoint | null = null;
-  let activeLH: SwingPoint | null = null;
-
-  let lastEmittedBullishBosPrice: number | null = null;
-  let lastEmittedBearishBosPrice: number | null = null;
+  const sortedSwings = [...swings].sort((a, b) => {
+    if (a.index !== b.index) return a.index - b.index;
+    if (a.price !== b.price) return a.price - b.price;
+    return a.type.localeCompare(b.type);
+  });
+  const consumedHighIndexes = new Set<number>();
+  const consumedLowIndexes = new Set<number>();
 
   for (let c = 0; c < candles.length; c++) {
     const candle = candles[c];
-    const swingsUpToC = sortedSwings.filter((s) => s.index <= c);
+    const confirmedSwings = sortedSwings.filter((s) => s.index + SWING_LOOKBACK <= c);
+    let latestHigh: SwingPoint | null = null;
+    let latestLow: SwingPoint | null = null;
 
-    const currentHH = swingsUpToC.filter((s) => s.type === 'HH').pop() || null;
-    const currentHL = swingsUpToC.filter((s) => s.type === 'HL').pop() || null;
-    const currentLL = swingsUpToC.filter((s) => s.type === 'LL').pop() || null;
-    const currentLH = swingsUpToC.filter((s) => s.type === 'LH').pop() || null;
+    for (const swing of confirmedSwings) {
+      if (swing.type === 'HH' || swing.type === 'LH') latestHigh = swing;
+      if (swing.type === 'HL' || swing.type === 'LL') latestLow = swing;
+    }
 
-    if (currentHH && (!activeHH || currentHH.index > activeHH.index)) activeHH = currentHH;
-    if (currentHL && (!activeHL || currentHL.index > activeHL.index)) activeHL = currentHL;
-    if (currentLL && (!activeLL || currentLL.index > activeLL.index)) activeLL = currentLL;
-    if (currentLH && (!activeLH || currentLH.index > activeLH.index)) activeLH = currentLH;
+    const priorStructure =
+      latestHigh?.type === 'HH' && latestLow?.type === 'HL'
+        ? 'BULLISH'
+        : latestHigh?.type === 'LH' && latestLow?.type === 'LL'
+          ? 'BEARISH'
+          : 'NEUTRAL';
 
-    if (activeHH && candle.close > activeHH.price) {
-      const hasPullbackHl = activeHL != null && activeHL.index < c && activeHL.index > activeHH.index;
-      const isNotDuplicate = lastEmittedBullishBosPrice !== activeHH.price;
+    let latestEligibleHigh: SwingPoint | null = null;
+    let latestEligibleLow: SwingPoint | null = null;
+    for (let i = confirmedSwings.length - 1; i >= 0; i--) {
+      const swing = confirmedSwings[i];
+      if (!latestEligibleHigh && (swing.type === 'HH' || swing.type === 'LH') && !consumedHighIndexes.has(swing.index)) {
+        latestEligibleHigh = swing;
+      }
+      if (!latestEligibleLow && (swing.type === 'HL' || swing.type === 'LL') && !consumedLowIndexes.has(swing.index)) {
+        latestEligibleLow = swing;
+      }
+      if (latestEligibleHigh && latestEligibleLow) break;
+    }
 
-      if (isNotDuplicate && hasPullbackHl) {
+    const crossedHighs = confirmedSwings.filter(
+      (swing) =>
+        (swing.type === 'HH' || swing.type === 'LH') &&
+        !consumedHighIndexes.has(swing.index) &&
+        candle.close > swing.price,
+    );
+    const crossedLows = confirmedSwings.filter(
+      (swing) =>
+        (swing.type === 'HL' || swing.type === 'LL') &&
+        !consumedLowIndexes.has(swing.index) &&
+        candle.close < swing.price,
+    );
+
+    crossedHighs.forEach((swing) => consumedHighIndexes.add(swing.index));
+    crossedLows.forEach((swing) => consumedLowIndexes.add(swing.index));
+
+    if (latestEligibleHigh && crossedHighs.some((swing) => swing.index === latestEligibleHigh?.index)) {
+      if (priorStructure !== 'NEUTRAL') {
+        const type = priorStructure === 'BULLISH' ? 'BOS' : 'CHoCH';
         lines.push({
-          id: `BOS-bull-${activeHH.index}-${c}`,
-          type: 'BOS',
+          id: `${type}-bullish-${latestEligibleHigh.index}-${c}`,
+          type,
           direction: 'bullish',
-          startIndex: activeHH.index,
+          startIndex: latestEligibleHigh.index,
           endIndex: c,
-          price: activeHH.price,
-          label: 'BOS',
+          price: latestEligibleHigh.price,
+          label: type,
           time: candle.time,
         });
-
-        marketTrend = 'BULLISH';
-        lastEmittedBullishBosPrice = activeHH.price;
-        activeHH = null;
       }
     }
 
-    if (marketTrend === 'BULLISH' && activeHL && candle.close < activeHL.price) {
-      lines.push({
-        id: `CHoCH-bear-${activeHL.index}-${c}`,
-        type: 'CHoCH',
-        direction: 'bearish',
-        startIndex: activeHL.index,
-        endIndex: c,
-        price: activeHL.price,
-        label: 'CHoCH',
-        time: candle.time,
-      });
-
-      marketTrend = 'BEARISH';
-      activeHL = null;
-      lastEmittedBearishBosPrice = null;
-    }
-
-    if (activeLL && candle.close < activeLL.price) {
-      const hasPullbackLh = activeLH != null && activeLH.index < c && activeLH.index > activeLL.index;
-      const isNotDuplicate = lastEmittedBearishBosPrice !== activeLL.price;
-
-      if (isNotDuplicate && hasPullbackLh) {
+    if (latestEligibleLow && crossedLows.some((swing) => swing.index === latestEligibleLow?.index)) {
+      if (priorStructure !== 'NEUTRAL') {
+        const type = priorStructure === 'BEARISH' ? 'BOS' : 'CHoCH';
         lines.push({
-          id: `BOS-bear-${activeLL.index}-${c}`,
-          type: 'BOS',
+          id: `${type}-bearish-${latestEligibleLow.index}-${c}`,
+          type,
           direction: 'bearish',
-          startIndex: activeLL.index,
+          startIndex: latestEligibleLow.index,
           endIndex: c,
-          price: activeLL.price,
-          label: 'BOS',
+          price: latestEligibleLow.price,
+          label: type,
           time: candle.time,
         });
-
-        marketTrend = 'BEARISH';
-        lastEmittedBearishBosPrice = activeLL.price;
-        activeLL = null;
       }
-    }
-
-    if (marketTrend === 'BEARISH' && activeLH && candle.close > activeLH.price) {
-      lines.push({
-        id: `CHoCH-bull-${activeLH.index}-${c}`,
-        type: 'CHoCH',
-        direction: 'bullish',
-        startIndex: activeLH.index,
-        endIndex: c,
-        price: activeLH.price,
-        label: 'CHoCH',
-        time: candle.time,
-      });
-
-      marketTrend = 'BULLISH';
-      activeLH = null;
-      lastEmittedBullishBosPrice = null;
     }
   }
 
-  const cleanLines: BosChochLine[] = [];
-  for (const line of lines) {
-    const isDuplicateOrOverlapping = cleanLines.some((existing) => {
-      const priceDiffRatio = Math.abs(existing.price - line.price) / Math.max(1, line.price);
-      if (existing.type === line.type) {
-        return priceDiffRatio < 0.015 || Math.abs(existing.endIndex - line.endIndex) < 6;
-      }
-      return priceDiffRatio < 0.008;
-    });
-
-    if (!isDuplicateOrOverlapping) {
-      cleanLines.push(line);
-    }
-  }
-
-  return cleanLines;
+  return lines;
 }
 
 export function detectFVGs(candles: Candle[], isIhsg: boolean = false): FvgZone[] {
@@ -624,101 +608,121 @@ export function detectPriceGaps(candles: Candle[]): PriceGap[] {
   return gaps;
 }
 
+function medianPositiveBodyBefore(candles: Candle[], endExclusive: number): number | null {
+  const bodies = candles
+    .slice(Math.max(0, endExclusive - 20), endExclusive)
+    .map((candle) => Math.abs(candle.close - candle.open))
+    .filter((body) => body > 0)
+    .sort((a, b) => a - b);
+
+  if (bodies.length < 5) return null;
+  const middle = Math.floor(bodies.length / 2);
+  return bodies.length % 2 === 1
+    ? bodies[middle]
+    : (bodies[middle - 1] + bodies[middle]) / 2;
+}
+
+function isDisplacementCandle(candles: Candle[], cIndex: number): boolean {
+  const c = candles[cIndex];
+  if (!c) return false;
+
+  const body = Math.abs(c.close - c.open);
+  const range = c.high - c.low;
+  const medianBody = medianPositiveBodyBefore(candles, cIndex);
+
+  return (
+    medianBody !== null &&
+    range > 0 &&
+    body >= 1.5 * medianBody &&
+    body / range >= 0.60
+  );
+}
+
+/** Detect only confirmed Order Blocks formed by an adjacent B-C-D sequence. */
 export function detectOrderBlocks(
   candles: Candle[],
-  swings: SwingPoint[],
-  bosLines: BosChochLine[],
-  fvgs: FvgZone[],
-  volumeMa: (number | null)[]
+  volumeMa: (number | null)[],
+  bosChochLines: BosChochLine[] = [],
 ): OrderBlock[] {
   const orderBlocks: OrderBlock[] = [];
-  if (!candles || candles.length < 3) return orderBlocks;
+  if (!candles || candles.length < 4) return orderBlocks;
 
-  const usedBullIndices = new Set<number>();
-  const usedBearIndices = new Set<number>();
-
-  const bullishBosEvents = bosLines.filter((l) => l.direction === 'bullish');
-  for (const bos of bullishBosEvents) {
-    const breakIndex = bos.endIndex;
-    let targetK = -1;
-    let minLow = Infinity;
-
-    for (let k = breakIndex - 1; k >= Math.max(0, breakIndex - 8); k--) {
-      const c = candles[k];
-      if (c && c.low < minLow) {
-        minLow = c.low;
-        targetK = k;
-      }
-    }
-
-    if (targetK !== -1 && !usedBullIndices.has(targetK)) {
-      const c = candles[targetK];
-      usedBullIndices.add(targetK);
-      const obTop = Math.round(Math.max(c.open, c.close));
-      const obBottom = Math.round(c.low);
-
-      let mitigated = false;
-      let endIndex = candles.length - 1;
-      for (let j = targetK + 1; j < candles.length; j++) {
-        if (candles[j].close < c.low) {
-          mitigated = true;
-          endIndex = j;
-          break;
-        }
-      }
-
-      const vMa = volumeMa[targetK];
-      const volumeSpike = vMa !== null && c.volume > (vMa || 1) * 1.3;
-
-      orderBlocks.push({
-        id: `ob-bull-${targetK}`,
-        type: 'bullish',
-        top: obTop,
-        bottom: obBottom,
-        startIndex: targetK,
-        endIndex: mitigated ? endIndex : candles.length - 1,
-        mitigated,
-        time: c.time,
-        volumeSpike,
+  const chooseStructureLine = (
+    direction: 'bullish' | 'bearish',
+    originIndex: number,
+  ): { structureConfirmation: 'BOS' | 'CHOCH' | 'NONE'; structureLineId?: string } => {
+    const candidates = bosChochLines
+      .filter(
+        (line) =>
+          line.direction === direction &&
+          (line.endIndex === originIndex + 1 || line.endIndex === originIndex + 2),
+      )
+      .sort((a, b) => {
+        if (a.endIndex !== b.endIndex) return a.endIndex - b.endIndex;
+        if (a.type !== b.type) return a.type === 'CHoCH' ? -1 : 1;
+        if (a.startIndex !== b.startIndex) return b.startIndex - a.startIndex;
+        return a.id.localeCompare(b.id);
       });
-    }
-  }
 
-  for (const swing of swings) {
-    const sIndex = swing.index;
-    if (sIndex >= 0 && sIndex < candles.length) {
-      if ((swing.type === 'HL' || swing.type === 'LL') && !usedBullIndices.has(sIndex)) {
-        const c = candles[sIndex];
-        usedBullIndices.add(sIndex);
-        const obTop = Math.round(Math.max(c.open, c.close));
-        const obBottom = Math.round(c.low);
+    const line = candidates[0];
+    return line
+      ? { structureConfirmation: line.type === 'CHoCH' ? 'CHOCH' : 'BOS', structureLineId: line.id }
+      : { structureConfirmation: 'NONE' };
+  };
 
-        let mitigated = false;
-        let endIndex = candles.length - 1;
-        for (let j = sIndex + 1; j < candles.length; j++) {
-          if (candles[j].close < c.low) {
-            mitigated = true;
-            endIndex = j;
-            break;
-          }
-        }
+  for (let i = 1; i <= candles.length - 3; i++) {
+    const a = candles[i - 1];
+    const b = candles[i];
+    const c = candles[i + 1];
+    const d = candles[i + 2];
+    const displacement = isDisplacementCandle(candles, i + 1);
+    const bullish =
+      b.low < a.low &&
+      b.low < c.low &&
+      b.close < b.open &&
+      c.close > c.open &&
+      displacement &&
+      c.close > b.high &&
+      d.low > b.high;
+    const bearish =
+      b.high > a.high &&
+      b.high > c.high &&
+      b.close > b.open &&
+      c.close < c.open &&
+      displacement &&
+      c.close < b.low &&
+      d.high < b.low;
 
-        orderBlocks.push({
-          id: `ob-bull-swing-${sIndex}`,
-          type: 'bullish',
-          top: obTop,
-          bottom: obBottom,
-          startIndex: sIndex,
-          endIndex: mitigated ? endIndex : candles.length - 1,
-          mitigated,
-          time: c.time,
-          volumeSpike: false,
-        });
+    if (!bullish && !bearish) continue;
+
+    let invalidationIndex = -1;
+    for (let j = i + 3; j < candles.length; j++) {
+      if ((bullish && candles[j].close < b.low) || (bearish && candles[j].close > b.high)) {
+        invalidationIndex = j;
+        break;
       }
     }
+    if (invalidationIndex !== -1) continue;
+
+    const vMa = volumeMa[i];
+    const volumeSpike = vMa !== null && b.volume > vMa * 1.3;
+    const structure = chooseStructureLine(bullish ? 'bullish' : 'bearish', i);
+    orderBlocks.push({
+      id: `${bullish ? 'ob-bull' : 'ob-bear'}-${i}`,
+      type: bullish ? 'bullish' : 'bearish',
+      top: Math.round(bullish ? Math.max(b.open, b.close) : b.high),
+      bottom: Math.round(bullish ? b.low : Math.min(b.open, b.close)),
+      startIndex: i,
+      endIndex: candles.length - 1,
+      mitigated: false,
+      time: b.time,
+      volumeSpike,
+      ...structure,
+      formationIndex: i + 2,
+    });
   }
 
-  return orderBlocks.filter((ob) => !ob.mitigated);
+  return orderBlocks;
 }
 
 export function detectLiquiditySweeps(candles: Candle[], swings: SwingPoint[]): LiquiditySweep[] {
@@ -820,15 +824,10 @@ function findPriorTappedBullishZone(candles: Candle[], isIhsg: boolean): PriorTa
   const previousCandle = candles[lastIndex - 1];
   const lastCandle = candles[lastIndex];
   const priorCandles = candles.slice(0, -1);
-  const priorSwings = detectSwings(priorCandles);
-  const priorBosLines = detectBosChoch(priorCandles, priorSwings);
   const priorFvgs = detectFVGs(priorCandles, isIhsg)
     .filter((zone) => zone.type === 'bullish' && !zone.mitigated);
   const priorOrderBlocks = detectOrderBlocks(
     priorCandles,
-    priorSwings,
-    priorBosLines,
-    priorFvgs,
     calculateVolumeMA(priorCandles, 20),
   ).filter((zone) => zone.type === 'bullish' && !zone.mitigated);
   const priorGaps = detectPriceGaps(priorCandles)
@@ -1235,7 +1234,7 @@ export function buildStockData(
   const bosChochLines = detectBosChoch(candles, swings);
   const fvgs = detectFVGs(candles, isIhsg);
   const priceGaps = detectPriceGaps(candles);
-  const orderBlocks = detectOrderBlocks(candles, swings, bosChochLines, fvgs, volumeMa20);
+  const orderBlocks = detectOrderBlocks(candles, volumeMa20, bosChochLines);
   const liquiditySweeps = detectLiquiditySweeps(candles, swings);
   const supportResistance = detectSupportResistance(candles);
 
@@ -1251,7 +1250,7 @@ export function buildStockData(
     priceGaps
   );
 
-  return {
+  const stockData: StockData = {
     symbol,
     ticker,
     name,
@@ -1280,6 +1279,28 @@ export function buildStockData(
     changePercent24h,
     isRealData,
   };
+
+  stockData.naraSummary = buildChartNaraSummary({
+    ticker,
+    isRealData,
+    candles,
+    swings,
+    bosChochLines,
+    fvgs,
+    orderBlocks,
+    priceGaps,
+    supportResistance,
+    indicators: stockData.indicators,
+    asOfDate: candles[candles.length - 1]?.time,
+    sourceMetadata: {
+      ticker,
+      timeframe: '1D',
+      asOfDate: candles[candles.length - 1]?.time,
+      source: isRealData === true ? 'REAL' : isRealData === false ? 'SYNTHETIC' : 'UNKNOWN',
+    },
+  });
+
+  return stockData;
 }
 
 export const liquidIDXStocks: StockRawConfig[] = [

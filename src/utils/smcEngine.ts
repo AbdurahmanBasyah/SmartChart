@@ -1,6 +1,7 @@
 import {
   Candle,
   SwingPoint,
+  BosChochLine,
   FvgZone,
   OrderBlock,
   PriceGap,
@@ -88,8 +89,12 @@ export function calculateVWAP(candles: Candle[]): (number | null)[] {
  */
 export function detectSwings(candles: Candle[], lookback: number = 3): SwingPoint[] {
   const swings: SwingPoint[] = [];
+  if (!candles || candles.length < lookback * 2 + 1) return swings;
 
-  for (let i = lookback; i < candles.length - lookback; i++) {
+  let previousHigh: SwingPoint | null = null;
+  let previousLow: SwingPoint | null = null;
+
+  for (let i = lookback; i <= candles.length - lookback - 1; i++) {
     const currentHigh = candles[i].high;
     const currentLow = candles[i].low;
 
@@ -103,29 +108,131 @@ export function detectSwings(candles: Candle[], lookback: number = 3): SwingPoin
     }
 
     if (isHigh) {
-      // Determine HH or LH based on previous swing high
-      const prevHigh = swings.filter((s) => s.type === 'HH' || s.type === 'LH').pop();
-      const type: 'HH' | 'LH' = !prevHigh || currentHigh > prevHigh.price ? 'HH' : 'LH';
-      swings.push({
+      const swing: SwingPoint = {
         index: i,
         time: candles[i].time,
         price: currentHigh,
-        type,
-      });
-    } else if (isLow) {
-      // Determine HL or LL based on previous swing low
-      const prevLow = swings.filter((s) => s.type === 'HL' || s.type === 'LL').pop();
-      const type: 'HL' | 'LL' = !prevLow || currentLow > prevLow.price ? 'HL' : 'LL';
-      swings.push({
+        type: !previousHigh || currentHigh > previousHigh.price ? 'HH' : 'LH',
+      };
+      swings.push(swing);
+      previousHigh = swing;
+    }
+
+    if (isLow) {
+      const swing: SwingPoint = {
         index: i,
         time: candles[i].time,
         price: currentLow,
-        type,
-      });
+        type: !previousLow ? 'LL' : currentLow > previousLow.price ? 'HL' : 'LL',
+      };
+      swings.push(swing);
+      previousLow = swing;
     }
   }
 
   return swings;
+}
+
+const SWING_LOOKBACK = 3;
+
+/**
+ * Detects causal BOS/CHoCH lines from confirmed swings. A pivot at p is not
+ * available until p + SWING_LOOKBACK, and a reference is consumed once a
+ * strict close break has been observed.
+ */
+export function detectBosChoch(candles: Candle[], swings: SwingPoint[]): BosChochLine[] {
+  const lines: BosChochLine[] = [];
+  if (!candles || candles.length === 0 || !swings || swings.length === 0) return lines;
+
+  const sortedSwings = [...swings].sort((a, b) => {
+    if (a.index !== b.index) return a.index - b.index;
+    if (a.price !== b.price) return a.price - b.price;
+    return a.type.localeCompare(b.type);
+  });
+  const consumedHighIndexes = new Set<number>();
+  const consumedLowIndexes = new Set<number>();
+
+  for (let c = 0; c < candles.length; c++) {
+    const confirmedSwings = sortedSwings.filter((s) => s.index + SWING_LOOKBACK <= c);
+    let latestHigh: SwingPoint | null = null;
+    let latestLow: SwingPoint | null = null;
+
+    for (const swing of confirmedSwings) {
+      if (swing.type === 'HH' || swing.type === 'LH') latestHigh = swing;
+      if (swing.type === 'HL' || swing.type === 'LL') latestLow = swing;
+    }
+
+    const priorStructure =
+      latestHigh?.type === 'HH' && latestLow?.type === 'HL'
+        ? 'BULLISH'
+        : latestHigh?.type === 'LH' && latestLow?.type === 'LL'
+          ? 'BEARISH'
+          : 'NEUTRAL';
+
+    let latestEligibleHigh: SwingPoint | null = null;
+    let latestEligibleLow: SwingPoint | null = null;
+    for (let i = confirmedSwings.length - 1; i >= 0; i--) {
+      const swing = confirmedSwings[i];
+      if (!latestEligibleHigh && (swing.type === 'HH' || swing.type === 'LH') && !consumedHighIndexes.has(swing.index)) {
+        latestEligibleHigh = swing;
+      }
+      if (!latestEligibleLow && (swing.type === 'HL' || swing.type === 'LL') && !consumedLowIndexes.has(swing.index)) {
+        latestEligibleLow = swing;
+      }
+      if (latestEligibleHigh && latestEligibleLow) break;
+    }
+
+    const candle = candles[c];
+    const crossedHighs = confirmedSwings.filter(
+      (swing) =>
+        (swing.type === 'HH' || swing.type === 'LH') &&
+        !consumedHighIndexes.has(swing.index) &&
+        candle.close > swing.price,
+    );
+    const crossedLows = confirmedSwings.filter(
+      (swing) =>
+        (swing.type === 'HL' || swing.type === 'LL') &&
+        !consumedLowIndexes.has(swing.index) &&
+        candle.close < swing.price,
+    );
+
+    crossedHighs.forEach((swing) => consumedHighIndexes.add(swing.index));
+    crossedLows.forEach((swing) => consumedLowIndexes.add(swing.index));
+
+    if (latestEligibleHigh && crossedHighs.some((swing) => swing.index === latestEligibleHigh?.index)) {
+      if (priorStructure !== 'NEUTRAL') {
+        const type = priorStructure === 'BULLISH' ? 'BOS' : 'CHoCH';
+        lines.push({
+          id: `${type}-bullish-${latestEligibleHigh.index}-${c}`,
+          type,
+          direction: 'bullish',
+          startIndex: latestEligibleHigh.index,
+          endIndex: c,
+          price: latestEligibleHigh.price,
+          label: type,
+          time: candle.time,
+        });
+      }
+    }
+
+    if (latestEligibleLow && crossedLows.some((swing) => swing.index === latestEligibleLow?.index)) {
+      if (priorStructure !== 'NEUTRAL') {
+        const type = priorStructure === 'BEARISH' ? 'BOS' : 'CHoCH';
+        lines.push({
+          id: `${type}-bearish-${latestEligibleLow.index}-${c}`,
+          type,
+          direction: 'bearish',
+          startIndex: latestEligibleLow.index,
+          endIndex: c,
+          price: latestEligibleLow.price,
+          label: type,
+          time: candle.time,
+        });
+      }
+    }
+  }
+
+  return lines;
 }
 
 
@@ -309,232 +416,126 @@ export function detectPriceGaps(candles: Candle[]): PriceGap[] {
   return gaps;
 }
 
-/**
- * Detects Order Blocks according to strict SMC technical rules:
- * 1. Bullish Order Block (OB Buy):
- *    - Anatomi Candle: Candle Bearish (warna merah/turun terakhir: close <= open) sebelum pergerakan impulsif naik.
- *    - Zona Ditarik: Dari Open sampai Close (mencakup Low/ekor bawah). top = max(open, close), bottom = c.low.
- *    - Pemicu (BOS): Candle impulsif wajib melakukan Break of Structure (BOS) ke atas (harga close di atas High sebelumnya).
- *    - Imbalance (FVG): Harus ada Fair Value Gap (FVG) atau dorongan impulsif setelah OB terbentuk.
- *    - Stop Loss (SL) & Invalidation: Ditempatkan di bawah c.low. Jika harga CLOSE di bawah Low, OB batal/invalid.
- * 
- * 2. Bearish Order Block (OB Sell):
- *    - Anatomi Candle: Candle Bullish (warna hijau/naik terakhir: close >= open) sebelum pergerakan impulsif turun.
- *    - Zona Ditarik: Dari Open sampai Close (mencakup High/ekor atas). top = c.high, bottom = min(open, close).
- *    - Pemicu (BOS): Candle impulsif wajib melakukan Break of Structure (BOS) ke bawah (harga close di bawah Low sebelumnya).
- *    - Imbalance (FVG): Harus ada Fair Value Gap (FVG) ke bawah setelah OB terbentuk.
- *    - Stop Loss (SL) & Invalidation: Ditempatkan di atas c.high. Jika harga CLOSE di atas High, OB batal/invalid.
- */
-/**
- * Helper to check if a candle satisfies Bullish Order Block criteria:
- * - Lower shadow (bottom of body down to low) >= body (abs(close - open)), OR
- * - Lower shadow length is at least 5 ticks (inclusive of tick boundaries e.g. 204-202-200-199-198)
- */
-export function isValidBullishObCandle(c: Candle): boolean {
+function medianPositiveBodyBefore(candles: Candle[], endExclusive: number): number | null {
+  const bodies = candles
+    .slice(Math.max(0, endExclusive - 20), endExclusive)
+    .map((candle) => Math.abs(candle.close - candle.open))
+    .filter((body) => body > 0)
+    .sort((a, b) => a - b);
+
+  if (bodies.length < 5) return null;
+  const middle = Math.floor(bodies.length / 2);
+  return bodies.length % 2 === 1
+    ? bodies[middle]
+    : (bodies[middle - 1] + bodies[middle]) / 2;
+}
+
+function isDisplacementCandle(candles: Candle[], cIndex: number): boolean {
+  const c = candles[cIndex];
   if (!c) return false;
-  const bottomBody = Math.min(c.open, c.close);
+
   const body = Math.abs(c.close - c.open);
-  const lowerShadow = bottomBody - c.low;
-  if (lowerShadow < 0) return false;
+  const range = c.high - c.low;
+  const medianBody = medianPositiveBodyBefore(candles, cIndex);
 
-  const shadowTicks = countIdxTicksBetween(bottomBody, c.low);
-  const reachedMinTickTarget = c.low <= addIdxTicks(bottomBody, -4);
-
-  return lowerShadow >= body || shadowTicks >= 4 || reachedMinTickTarget;
+  return (
+    medianBody !== null &&
+    range > 0 &&
+    body >= 1.5 * medianBody &&
+    body / range >= 0.60
+  );
 }
 
 /**
- * Helper to check if a candle satisfies Bearish Order Block criteria:
- * - Upper shadow (high down to top of body) >= body (abs(open - close)), OR
- * - Upper shadow length is at least 5 ticks (inclusive of tick boundaries)
+ * Detects only confirmed Order Blocks formed by an adjacent B-C-D sequence.
+ * B is the origin candle, C is the displacement candle, and D leaves the
+ * strict three-candle FVG. BOS/CHoCH and swing/FVG detector output are not
+ * formation requirements here.
  */
-export function isValidBearishObCandle(c: Candle): boolean {
-  if (!c) return false;
-  const topBody = Math.max(c.open, c.close);
-  const body = Math.abs(c.close - c.open);
-  const upperShadow = c.high - topBody;
-  if (upperShadow < 0) return false;
-
-  const shadowTicks = countIdxTicksBetween(c.high, topBody);
-  const reachedMinTickTarget = c.high >= addIdxTicks(topBody, 4);
-
-  return upperShadow >= body || shadowTicks >= 4 || reachedMinTickTarget;
-}
-
 export function detectOrderBlocks(
   candles: Candle[],
-  swings: SwingPoint[],
-  fvgs: FvgZone[],
-  volumeMa: (number | null)[]
+  volumeMa: (number | null)[],
+  bosChochLines: BosChochLine[] = [],
 ): OrderBlock[] {
   const orderBlocks: OrderBlock[] = [];
-  if (!candles || candles.length < 3) return orderBlocks;
+  if (!candles || candles.length < 4) return orderBlocks;
 
-  const usedBullIndices = new Set<number>();
-  const usedBearIndices = new Set<number>();
-
-  // 1. Bullish Order Blocks (Demand OB): Origin base candle before an upward displacement/rally
-  for (let i = 1; i < candles.length - 2; i++) {
-    const c = candles[i];
-    if (!isValidBullishObCandle(c)) continue;
-
-    // Check if subsequent 1-4 candles produce strong expansion or FVG
-    const hasAssociatedFvg = fvgs.some(
-      (f) => f.type === 'bullish' && f.startIndex >= i && f.startIndex <= i + 4
-    );
-    const hasImpulsiveRally = candles[i + 1] && candles[i + 2] && (
-      candles[i + 2].close > c.high * 1.02 || (candles[i + 1].close > c.close && candles[i + 2].close > candles[i + 1].close)
-    );
-
-    if ((hasAssociatedFvg || hasImpulsiveRally) && !usedBullIndices.has(i)) {
-      usedBullIndices.add(i);
-      const obTop = Math.round(Math.max(c.open, c.close));
-      const obBottom = Math.round(c.low);
-
-      let mitigated = false;
-      let endIndex = candles.length - 1;
-
-      // Invalidation: Price CLOSES below c.low
-      for (let j = i + 1; j < candles.length; j++) {
-        if (candles[j].close < c.low) {
-          mitigated = true;
-          endIndex = j;
-          break;
-        }
-      }
-
-      const vMa = volumeMa[i];
-      const volumeSpike = vMa !== null && c.volume > vMa * 1.3;
-
-      orderBlocks.push({
-        id: `ob-bull-${i}`,
-        type: 'bullish',
-        top: obTop,
-        bottom: obBottom,
-        startIndex: i,
-        endIndex: mitigated ? endIndex : candles.length - 1,
-        mitigated,
-        time: c.time,
-        volumeSpike,
+  const chooseStructureLine = (
+    direction: 'bullish' | 'bearish',
+    originIndex: number,
+  ): { structureConfirmation: 'BOS' | 'CHOCH' | 'NONE'; structureLineId?: string } => {
+    const candidates = bosChochLines
+      .filter(
+        (line) =>
+          line.direction === direction &&
+          (line.endIndex === originIndex + 1 || line.endIndex === originIndex + 2),
+      )
+      .sort((a, b) => {
+        if (a.endIndex !== b.endIndex) return a.endIndex - b.endIndex;
+        if (a.type !== b.type) return a.type === 'CHoCH' ? -1 : 1;
+        if (a.startIndex !== b.startIndex) return b.startIndex - a.startIndex;
+        return a.id.localeCompare(b.id);
       });
-    }
-  }
 
-  // 2. Bearish Order Blocks (Supply OB): Origin base candle before a downward displacement
-  for (let i = 1; i < candles.length - 2; i++) {
-    const c = candles[i];
-    if (!isValidBearishObCandle(c)) continue;
+    const line = candidates[0];
+    return line
+      ? { structureConfirmation: line.type === 'CHoCH' ? 'CHOCH' : 'BOS', structureLineId: line.id }
+      : { structureConfirmation: 'NONE' };
+  };
 
-    const hasAssociatedFvg = fvgs.some(
-      (f) => f.type === 'bearish' && f.startIndex >= i && f.startIndex <= i + 4
-    );
-    const hasImpulsiveDrop = candles[i + 1] && candles[i + 2] && (
-      candles[i + 2].close < c.low * 0.98 || (candles[i + 1].close < c.close && candles[i + 2].close < candles[i + 1].close)
-    );
+  for (let i = 1; i <= candles.length - 3; i++) {
+    const a = candles[i - 1];
+    const b = candles[i];
+    const c = candles[i + 1];
+    const d = candles[i + 2];
+    const displacement = isDisplacementCandle(candles, i + 1);
+    const bullish =
+      b.low < a.low &&
+      b.low < c.low &&
+      b.close < b.open &&
+      c.close > c.open &&
+      displacement &&
+      c.close > b.high &&
+      d.low > b.high;
+    const bearish =
+      b.high > a.high &&
+      b.high > c.high &&
+      b.close > b.open &&
+      c.close < c.open &&
+      displacement &&
+      c.close < b.low &&
+      d.high < b.low;
 
-    if ((hasAssociatedFvg || hasImpulsiveDrop) && !usedBearIndices.has(i)) {
-      usedBearIndices.add(i);
-      const obTop = Math.round(c.high);
-      const obBottom = Math.round(Math.min(c.open, c.close));
+    if (!bullish && !bearish) continue;
 
-      let mitigated = false;
-      let endIndex = candles.length - 1;
-
-      // Invalidation: Price CLOSES above c.high
-      for (let j = i + 1; j < candles.length; j++) {
-        if (candles[j].close > c.high) {
-          mitigated = true;
-          endIndex = j;
-          break;
-        }
-      }
-
-      const vMa = volumeMa[i];
-      const volumeSpike = vMa !== null && c.volume > vMa * 1.3;
-
-      orderBlocks.push({
-        id: `ob-bear-${i}`,
-        type: 'bearish',
-        top: obTop,
-        bottom: obBottom,
-        startIndex: i,
-        endIndex: mitigated ? endIndex : candles.length - 1,
-        mitigated,
-        time: c.time,
-        volumeSpike,
-      });
-    }
-  }
-
-  // 3. Fallback for major swing points
-  for (const swing of swings) {
-    const sIndex = swing.index;
-    if (sIndex < 0 || sIndex >= candles.length) continue;
-
-    if ((swing.type === 'HL' || swing.type === 'LL') && !usedBullIndices.has(sIndex)) {
-      const c = candles[sIndex];
-      if (isValidBullishObCandle(c)) {
-        usedBullIndices.add(sIndex);
-        const obTop = Math.round(Math.max(c.open, c.close));
-        const obBottom = Math.round(c.low);
-
-        let mitigated = false;
-        let endIndex = candles.length - 1;
-        for (let j = sIndex + 1; j < candles.length; j++) {
-          if (candles[j].close < c.low) {
-            mitigated = true;
-            endIndex = j;
-            break;
-          }
-        }
-
-        orderBlocks.push({
-          id: `ob-bull-swing-${sIndex}`,
-          type: 'bullish',
-          top: obTop,
-          bottom: obBottom,
-          startIndex: sIndex,
-          endIndex: mitigated ? endIndex : candles.length - 1,
-          mitigated,
-          time: c.time,
-          volumeSpike: false,
-        });
+    let invalidationIndex = -1;
+    for (let j = i + 3; j < candles.length; j++) {
+      if ((bullish && candles[j].close < b.low) || (bearish && candles[j].close > b.high)) {
+        invalidationIndex = j;
+        break;
       }
     }
+    if (invalidationIndex !== -1) continue;
 
-    if ((swing.type === 'HH' || swing.type === 'LH') && !usedBearIndices.has(sIndex)) {
-      const c = candles[sIndex];
-      if (isValidBearishObCandle(c)) {
-        usedBearIndices.add(sIndex);
-        const obTop = Math.round(c.high);
-        const obBottom = Math.round(Math.min(c.open, c.close));
-
-        let mitigated = false;
-        let endIndex = candles.length - 1;
-        for (let j = sIndex + 1; j < candles.length; j++) {
-          if (candles[j].close > c.high) {
-            mitigated = true;
-            endIndex = j;
-            break;
-          }
-        }
-
-        orderBlocks.push({
-          id: `ob-bear-swing-${sIndex}`,
-          type: 'bearish',
-          top: obTop,
-          bottom: obBottom,
-          startIndex: sIndex,
-          endIndex: mitigated ? endIndex : candles.length - 1,
-          mitigated,
-          time: c.time,
-          volumeSpike: false,
-        });
-      }
-    }
+    const vMa = volumeMa[i];
+    const volumeSpike = vMa !== null && b.volume > vMa * 1.3;
+    const structure = chooseStructureLine(bullish ? 'bullish' : 'bearish', i);
+    orderBlocks.push({
+      id: `${bullish ? 'ob-bull' : 'ob-bear'}-${i}`,
+      type: bullish ? 'bullish' : 'bearish',
+      top: Math.round(bullish ? Math.max(b.open, b.close) : b.high),
+      bottom: Math.round(bullish ? b.low : Math.min(b.open, b.close)),
+      startIndex: i,
+      endIndex: candles.length - 1,
+      mitigated: false,
+      time: b.time,
+      volumeSpike,
+      ...structure,
+      formationIndex: i + 2,
+    });
   }
 
-  return orderBlocks.filter((ob) => !ob.mitigated);
+  return orderBlocks;
 }
 
 /**
@@ -657,13 +658,10 @@ function findPriorTappedBullishZone(candles: Candle[], isIhsg: boolean): PriorTa
   const previousCandle = candles[lastIndex - 1];
   const lastCandle = candles[lastIndex];
   const priorCandles = candles.slice(0, -1);
-  const priorSwings = detectSwings(priorCandles);
   const priorFvgs = detectFVGs(priorCandles, isIhsg)
     .filter((zone) => zone.type === 'bullish' && !zone.mitigated);
   const priorOrderBlocks = detectOrderBlocks(
     priorCandles,
-    priorSwings,
-    priorFvgs,
     calculateVolumeMA(priorCandles, 20),
   ).filter((zone) => zone.type === 'bullish' && !zone.mitigated);
   const priorGaps = detectPriceGaps(priorCandles)

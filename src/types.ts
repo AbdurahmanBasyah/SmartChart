@@ -16,6 +16,17 @@ export interface SwingPoint {
   type: SwingType;
 }
 
+export interface BosChochLine {
+  id: string;
+  type: 'BOS' | 'CHoCH';
+  direction: 'bullish' | 'bearish';
+  startIndex: number;
+  endIndex: number;
+  price: number;
+  label: string;
+  time: string;
+}
+
 export interface BrokerDailyPoint {
   date: string; // YYYY-MM-DD
   buyVol: number; // in lots
@@ -75,6 +86,168 @@ export interface BrokerInventorySummary {
     cleanAccumBrokerCount: number;
     cleanDistBrokerCount: number;
   };
+  coverage?: BrokerInventoryCoverage;
+}
+
+export interface BrokerInventoryCoverage {
+  normalizedTicker: string;
+  requestedStartDate: string;
+  requestedEndDate: string;
+  returnedStartDate?: string;
+  returnedEndDate?: string;
+  summaryReturnedStartDate?: string;
+  summaryReturnedEndDate?: string;
+  accumulationReturnedStartDate?: string;
+  accumulationReturnedEndDate?: string;
+  rangeMatches?: boolean;
+  retrievedAt?: string;
+  source: 'EXTERNAL' | 'SYNTHETIC' | 'UNKNOWN';
+  brokerLimit?: number;
+  selectedBrokerCodes?: string[];
+  summaryBrokerCount: number;
+  accumulationBrokerCount: number;
+  validSeriesPointCount: number;
+  intersectionPointCount: number;
+  missingRequestedDates: string[];
+  missingReason?: string;
+  summaryValid: boolean;
+  accumulationValid: boolean;
+  sourceSnapshotKey?: string;
+}
+
+export type NaraEvidenceFamily =
+  | 'STRUCTURE'
+  | 'POI'
+  | 'LIFECYCLE'
+  | 'PARTICIPATION'
+  | 'RISK';
+
+export type NaraEvidenceRole = 'OPPORTUNITY' | 'RISK' | 'CONTEXT' | 'UNKNOWN';
+
+export type NaraDirection = 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+
+export type NaraQualityStatus =
+  | 'VALID'
+  | 'DEGRADED'
+  | 'STALE'
+  | 'MISSING'
+  | 'CONFLICT';
+
+export type NaraEvidenceSourceType =
+  | 'BOS'
+  | 'CHOCH'
+  | 'TREND'
+  | 'ORDER_BLOCK'
+  | 'FVG'
+  | 'OPENING_GAP'
+  | 'SUPPORT'
+  | 'RESISTANCE'
+  | 'VOLUME'
+  | 'BROKER_FLOW'
+  | 'RISK_REWARD'
+  | 'DATA_QUALITY';
+
+export type NaraEvidenceState =
+  | 'FORMED'
+  | 'ACTIVE'
+  | 'TAPPED'
+  | 'PARTIALLY_FILLED'
+  | 'FULLY_FILLED'
+  | 'INVALIDATED'
+  | 'BROKEN'
+  | 'SUPERSEDED'
+  | 'EXPIRED'
+  | 'STALE'
+  | 'CONFLICT'
+  | 'UNKNOWN';
+
+export type NaraFreshnessTier = 'FRESH' | 'AGING' | 'STALE' | 'UNKNOWN';
+
+export interface NaraProvenance {
+  ruleVersion: string;
+  source: 'REAL' | 'EXTERNAL' | 'SYNTHETIC' | 'UNKNOWN';
+  ticker: string;
+  timeframe: '1D';
+  asOfDate: string;
+  firstCandleDate?: string;
+  latestCandleDate?: string;
+  candleCount?: number;
+  sourceSnapshotKey?: string;
+  retrievedAt?: string;
+}
+
+export interface NaraLifecycleMetadata {
+  originIndex?: number;
+  formationIndex?: number;
+  asOfIndex?: number;
+  originalTop?: number;
+  originalBottom?: number;
+  remainingTop?: number;
+  remainingBottom?: number;
+  firstTapIndex?: number;
+  firstTapDate?: string;
+  transitionIndex?: number;
+  transitionDate?: string;
+  transitionReason?: string;
+  ruleVersion: string;
+}
+
+export interface NaraEvidenceItem {
+  evidenceId: string;
+  evidenceFamilyId: string;
+  formationId?: string;
+  family: NaraEvidenceFamily;
+  role: NaraEvidenceRole;
+  sourceType: NaraEvidenceSourceType;
+  direction: NaraDirection;
+  state: NaraEvidenceState;
+  asOfDate: string;
+  sourceDate?: string;
+  timeframe: '1D';
+  ageTradingDays?: number;
+  freshnessTier: NaraFreshnessTier;
+  value?: number;
+  unit?: string;
+  quality: number;
+  qualityStatus: NaraQualityStatus;
+  provenance: string;
+  lifecycle?: NaraLifecycleMetadata;
+  relatedEvidenceIds: string[];
+  reasons: string[];
+}
+
+export type NaraStance =
+  | 'BULLISH_CONTEXT'
+  | 'NEUTRAL'
+  | 'RISK_ELEVATED'
+  | 'INSUFFICIENT_DATA';
+
+export interface NaraSummary {
+  ticker: string;
+  timeframe: '1D';
+  asOfDate: string;
+  headline: {
+    key: string;
+    params: Record<string, string | number>;
+  };
+  stance: NaraStance;
+  evidence: NaraEvidenceItem[];
+  opportunityEvidenceIds: string[];
+  riskEvidenceIds: string[];
+  unknownEvidenceIds: string[];
+  dataQuality: {
+    status: 'VALID' | 'DEGRADED' | 'INSUFFICIENT_DATA' | 'CONFLICT';
+    reasons: string[];
+    source: 'REAL' | 'EXTERNAL' | 'SYNTHETIC' | 'UNKNOWN';
+    freshnessTier: NaraFreshnessTier;
+  };
+  provenance: NaraProvenance;
+  ownership: {
+    value: 0;
+    status: 'UNAVAILABLE_OFFICIAL_DATED_DATA';
+  };
+  weightsVersion: 'NONE';
+  disclaimerKey: 'RULE_BASED_CONTEXT_NOT_INVESTMENT_ADVICE';
 }
 
 export interface FvgZone {
@@ -98,6 +271,9 @@ export interface OrderBlock {
   mitigated: boolean;
   time: string;
   volumeSpike: boolean;
+  structureConfirmation: 'BOS' | 'CHOCH' | 'NONE';
+  structureLineId?: string;
+  formationIndex: number;
 }
 
 export interface LiquiditySweep {
@@ -183,6 +359,7 @@ export interface StockData {
   conglomerate?: string; // e.g., "Prajogo Pangestu", "Grup Bakrie", "Happy Hapsoro", "Haji Isam"
   candles: Candle[];
   swings: SwingPoint[];
+  bosChochLines: BosChochLine[];
   fvgs: FvgZone[];
   orderBlocks: OrderBlock[];
   priceGaps?: PriceGap[];
@@ -194,6 +371,7 @@ export interface StockData {
   change24h: number;
   changePercent24h: number;
   isRealData?: boolean;
+  naraSummary?: NaraSummary;
 }
 
 export interface ScreenerFilter {
