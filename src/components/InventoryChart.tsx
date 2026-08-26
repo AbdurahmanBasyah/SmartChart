@@ -109,23 +109,32 @@ function finiteNumber(value: unknown): number | null {
 }
 
 function normalizeBrokerCode(value: unknown): string {
-    return String(value || "").trim().toUpperCase();
+    return String(value || "")
+        .trim()
+        .toUpperCase();
 }
 
 function normalizeDate(value: unknown): string {
-    return String(value || "").trim().slice(0, 10);
+    return String(value || "")
+        .trim()
+        .slice(0, 10);
 }
 
 function isValidIsoDate(value: string): boolean {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
     const [year, month, day] = value.split("-").map(Number);
     const date = new Date(Date.UTC(year, month - 1, day));
-    return date.getUTCFullYear() === year
-        && date.getUTCMonth() === month - 1
-        && date.getUTCDate() === day;
+    return (
+        date.getUTCFullYear() === year &&
+        date.getUTCMonth() === month - 1 &&
+        date.getUTCDate() === day
+    );
 }
 
-function normalizeProviderRange(startValue: unknown, endValue: unknown): {
+function normalizeProviderRange(
+    startValue: unknown,
+    endValue: unknown,
+): {
     start: string;
     end: string;
     complete: boolean;
@@ -135,7 +144,9 @@ function normalizeProviderRange(startValue: unknown, endValue: unknown): {
     return {
         start,
         end,
-        complete: Boolean(start && end && isValidIsoDate(start) && isValidIsoDate(end)),
+        complete: Boolean(
+            start && end && isValidIsoDate(start) && isValidIsoDate(end),
+        ),
     };
 }
 
@@ -147,7 +158,9 @@ function createEmptyInventorySummary(
 ): BrokerInventorySummary {
     const candles = (stock?.candles || []).filter((candle) => {
         const date = normalizeDate(candle.time);
-        return (!startDate || date >= startDate) && (!endDate || date <= endDate);
+        return (
+            (!startDate || date >= startDate) && (!endDate || date <= endDate)
+        );
     });
 
     return {
@@ -182,7 +195,9 @@ function createEmptyInventorySummary(
             accumulationBrokerCount: 0,
             validSeriesPointCount: 0,
             intersectionPointCount: 0,
-            missingRequestedDates: candles.map((candle) => normalizeDate(candle.time)),
+            missingRequestedDates: candles.map((candle) =>
+                normalizeDate(candle.time),
+            ),
             missingReason: "REAL_BROKER_DATA_UNAVAILABLE",
             summaryValid: false,
             accumulationValid: false,
@@ -192,7 +207,9 @@ function createEmptyInventorySummary(
     };
 }
 
-function buildDailyPoints(series: BrokerDataAccumulationSeries): BrokerDailyPoint[] {
+function buildDailyPoints(
+    series: BrokerDataAccumulationSeries,
+): BrokerDailyPoint[] {
     const pointByDate = new Map<string, BrokerDataAccumulationPoint>();
     (series.points || []).forEach((point) => {
         const date = normalizeDate(point.date);
@@ -245,13 +262,22 @@ export function buildBrokerDataInventorySummary(
         const code = normalizeBrokerCode(row.broker_code);
         if (code) rowByCode.set(code, row);
     });
-    const seriesByCode = new Map<string, { series: BrokerDataAccumulationSeries; points: BrokerDailyPoint[] }>();
+    const seriesByCode = new Map<
+        string,
+        { series: BrokerDataAccumulationSeries; points: BrokerDailyPoint[] }
+    >();
     series.forEach((entry) => {
         const code = normalizeBrokerCode(entry.broker_code);
-        if (code) seriesByCode.set(code, { series: entry, points: buildDailyPoints(entry) });
+        if (code)
+            seriesByCode.set(code, {
+                series: entry,
+                points: buildDailyPoints(entry),
+            });
     });
 
-    const codes = Array.from(new Set([...rowByCode.keys(), ...seriesByCode.keys()]));
+    const codes = Array.from(
+        new Set([...rowByCode.keys(), ...seriesByCode.keys()]),
+    );
     const allBrokers: BrokerInventoryItem[] = codes.map((code, index) => {
         const row = rowByCode.get(code);
         const history = seriesByCode.get(code);
@@ -263,45 +289,61 @@ export function buildBrokerDataInventorySummary(
         const sellLots = sellShares / 100;
         const explicitNetLots = finiteNumber(row?.nvol);
         const explicitNetValue = finiteNumber(row?.nval);
-        const netLots = explicitNetLots !== null
-            ? explicitNetLots / 100
-            : row
-              ? buyLots - sellLots
-              : dailyPoints.reduce((sum, point) => sum + point.netVol, 0);
+        const netLots =
+            explicitNetLots !== null
+                ? explicitNetLots / 100
+                : row
+                  ? buyLots - sellLots
+                  : dailyPoints.reduce((sum, point) => sum + point.netVol, 0);
         const buyValue = numberOrZero(row?.bval);
         const sellValue = numberOrZero(row?.sval);
-        const netValue = explicitNetValue !== null
-            ? explicitNetValue
-            : row
-              ? buyValue - sellValue
-              : dailyPoints.reduce((sum, point) => sum + point.netVal, 0);
+        const netValue =
+            explicitNetValue !== null
+                ? explicitNetValue
+                : row
+                  ? buyValue - sellValue
+                  : dailyPoints.reduce((sum, point) => sum + point.netVal, 0);
         const turnoverLots = buyLots + sellLots;
         const buyPurity = turnoverLots > 0 ? (buyLots / turnoverLots) * 100 : 0;
-        const sellPurity = turnoverLots > 0 ? (sellLots / turnoverLots) * 100 : 0;
+        const sellPurity =
+            turnoverLots > 0 ? (sellLots / turnoverLots) * 100 : 0;
         const cleanRatio = Math.round(netLots >= 0 ? buyPurity : sellPurity);
-        const churnRatio = turnoverLots > 0
-            ? Math.round((turnoverLots / Math.max(1, Math.abs(netLots))) * 10) / 10
-            : 0;
+        const churnRatio =
+            turnoverLots > 0
+                ? Math.round(
+                      (turnoverLots / Math.max(1, Math.abs(netLots))) * 10,
+                  ) / 10
+                : 0;
         let cleanTendency: BrokerInventoryItem["cleanTendency"] = "NEUTRAL";
         if (turnoverLots > 0 && netLots > 0) {
-            cleanTendency = buyPurity >= 78 && churnRatio <= 1.3
-                ? "CLEAN_ACCUM"
-                : buyPurity >= 62
-                  ? "MODERATE_ACCUM"
-                  : "NEUTRAL";
+            cleanTendency =
+                buyPurity >= 78 && churnRatio <= 1.3
+                    ? "CLEAN_ACCUM"
+                    : buyPurity >= 62
+                      ? "MODERATE_ACCUM"
+                      : "NEUTRAL";
         } else if (turnoverLots > 0 && netLots < 0) {
-            cleanTendency = sellPurity >= 78 && churnRatio <= 1.3
-                ? "CLEAN_DIST"
-                : sellPurity >= 62
-                  ? "MODERATE_DIST"
-                  : "NEUTRAL";
+            cleanTendency =
+                sellPurity >= 78 && churnRatio <= 1.3
+                    ? "CLEAN_DIST"
+                    : sellPurity >= 62
+                      ? "MODERATE_DIST"
+                      : "NEUTRAL";
         }
-        const lastBuyAverage = [...dailyPoints].reverse().find((point) => point.avgBuyPrice > 0)?.avgBuyPrice;
-        const lastSellAverage = [...dailyPoints].reverse().find((point) => point.avgSellPrice > 0)?.avgSellPrice;
+        const lastBuyAverage = [...dailyPoints]
+            .reverse()
+            .find((point) => point.avgBuyPrice > 0)?.avgBuyPrice;
+        const lastSellAverage = [...dailyPoints]
+            .reverse()
+            .find((point) => point.avgSellPrice > 0)?.avgSellPrice;
 
         return {
             brokerCode: code,
-            brokerName: row?.broker_name || history?.series.broker_name || catalog?.name || code,
+            brokerName:
+                row?.broker_name ||
+                history?.series.broker_name ||
+                catalog?.name ||
+                code,
             type: catalog?.type || "RETAIL",
             totalBuyVol: buyLots,
             totalSellVol: sellLots,
@@ -309,8 +351,14 @@ export function buildBrokerDataInventorySummary(
             totalSellVal: sellValue,
             netVol: netLots,
             netVal: netValue,
-            avgBuyPrice: buyShares > 0 ? Math.round(buyValue / buyShares) : lastBuyAverage || 0,
-            avgSellPrice: sellShares > 0 ? Math.round(sellValue / sellShares) : lastSellAverage || 0,
+            avgBuyPrice:
+                buyShares > 0
+                    ? Math.round(buyValue / buyShares)
+                    : lastBuyAverage || 0,
+            avgSellPrice:
+                sellShares > 0
+                    ? Math.round(sellValue / sellShares)
+                    : lastSellAverage || 0,
             cleanTendency,
             cleanRatio,
             churnRatio,
@@ -342,7 +390,8 @@ export function buildBrokerDataInventorySummary(
         .forEach((broker) => autoCodes.add(broker.brokerCode));
     customBrokersToAdd.forEach((code) => {
         const normalized = code.trim().toUpperCase();
-        if (normalized && seriesByCode.get(normalized)?.points.length) autoCodes.add(normalized);
+        if (normalized && seriesByCode.get(normalized)?.points.length)
+            autoCodes.add(normalized);
     });
 
     const finalize = (broker: BrokerInventoryItem) => ({
@@ -355,11 +404,19 @@ export function buildBrokerDataInventorySummary(
     const foreignBrokers = allBrokers.filter(
         (broker) => broker.type === "FOREIGN",
     );
-    const normalizedFallbackTicker = fallback.ticker.replace(".JK", "").toUpperCase();
-    const normalizedSummaryTicker = normalizeBrokerCode(summaryPayload?.stock_code || normalizedFallbackTicker).replace(".JK", "");
-    const normalizedAccumulationTicker = normalizeBrokerCode(accumulationPayload?.code || normalizedFallbackTicker).replace(".JK", "");
-    const summaryTickerMatches = normalizedSummaryTicker === normalizedFallbackTicker;
-    const accumulationTickerMatches = normalizedAccumulationTicker === normalizedFallbackTicker;
+    const normalizedFallbackTicker = fallback.ticker
+        .replace(".JK", "")
+        .toUpperCase();
+    const normalizedSummaryTicker = normalizeBrokerCode(
+        summaryPayload?.stock_code || normalizedFallbackTicker,
+    ).replace(".JK", "");
+    const normalizedAccumulationTicker = normalizeBrokerCode(
+        accumulationPayload?.code || normalizedFallbackTicker,
+    ).replace(".JK", "");
+    const summaryTickerMatches =
+        normalizedSummaryTicker === normalizedFallbackTicker;
+    const accumulationTickerMatches =
+        normalizedAccumulationTicker === normalizedFallbackTicker;
     const tickerMatches = summaryTickerMatches && accumulationTickerMatches;
     const summaryRange = normalizeProviderRange(
         summaryPayload?.broker_start_date,
@@ -371,34 +428,55 @@ export function buildBrokerDataInventorySummary(
     );
     const requestedStartDate = normalizeDate(fallback.startDate);
     const requestedEndDate = normalizeDate(fallback.endDate);
-    const summaryRangeMatches = summaryRange.complete
-        && summaryRange.start === requestedStartDate
-        && summaryRange.end === requestedEndDate;
-    const accumulationRangeMatches = accumulationRange.complete
-        && accumulationRange.start === requestedStartDate
-        && accumulationRange.end === requestedEndDate;
-    const endpointRangeMatches = summaryRange.complete
-        && accumulationRange.complete
-        && summaryRange.start === accumulationRange.start
-        && summaryRange.end === accumulationRange.end;
-    const rangeMatches = summaryRangeMatches && accumulationRangeMatches && endpointRangeMatches;
-    const candleDates = new Set(fallback.candles.map((candle) => normalizeDate(candle.time)));
+    const summaryRangeMatches =
+        summaryRange.complete &&
+        summaryRange.start === requestedStartDate &&
+        summaryRange.end === requestedEndDate;
+    const accumulationRangeMatches =
+        accumulationRange.complete &&
+        accumulationRange.start === requestedStartDate &&
+        accumulationRange.end === requestedEndDate;
+    const endpointRangeMatches =
+        summaryRange.complete &&
+        accumulationRange.complete &&
+        summaryRange.start === accumulationRange.start &&
+        summaryRange.end === accumulationRange.end;
+    const rangeMatches =
+        summaryRangeMatches && accumulationRangeMatches && endpointRangeMatches;
+    const candleDates = new Set(
+        fallback.candles.map((candle) => normalizeDate(candle.time)),
+    );
     const validSeriesPointCount = Array.from(seriesByCode.values()).reduce(
-        (sum, entry) => sum + entry.points.filter((point) => Boolean(point.date)).length,
+        (sum, entry) =>
+            sum + entry.points.filter((point) => Boolean(point.date)).length,
         0,
     );
     const intersectionPointCount = Array.from(seriesByCode.values()).reduce(
-        (sum, entry) => sum + entry.points.filter((point) => candleDates.has(point.date)).length,
+        (sum, entry) =>
+            sum +
+            entry.points.filter((point) => candleDates.has(point.date)).length,
         0,
     );
     const providerDates = new Set(
-        Array.from(seriesByCode.values()).flatMap((entry) => entry.points.map((point) => point.date)),
+        Array.from(seriesByCode.values()).flatMap((entry) =>
+            entry.points.map((point) => point.date),
+        ),
     );
     const missingRequestedDates = Array.from(candleDates)
         .filter((date) => !providerDates.has(date))
         .sort();
-    const summaryValid = Boolean(summaryPayload && rowByCode.size > 0 && summaryTickerMatches && summaryRangeMatches);
-    const accumulationValid = Boolean(accumulationPayload && validSeriesPointCount > 0 && accumulationTickerMatches && accumulationRangeMatches);
+    const summaryValid = Boolean(
+        summaryPayload &&
+        rowByCode.size > 0 &&
+        summaryTickerMatches &&
+        summaryRangeMatches,
+    );
+    const accumulationValid = Boolean(
+        accumulationPayload &&
+        validSeriesPointCount > 0 &&
+        accumulationTickerMatches &&
+        accumulationRangeMatches,
+    );
     const coverageReasons: string[] = [];
     if (!summaryRange.complete) {
         coverageReasons.push("BROKER_SUMMARY_RANGE_MISSING");
@@ -410,29 +488,42 @@ export function buildBrokerDataInventorySummary(
     } else if (!accumulationRangeMatches) {
         coverageReasons.push("BROKER_ACCUMULATION_RANGE_MISMATCH");
     }
-    if (summaryRange.complete && accumulationRange.complete && !endpointRangeMatches) {
+    if (
+        summaryRange.complete &&
+        accumulationRange.complete &&
+        !endpointRangeMatches
+    ) {
         coverageReasons.push("BROKER_ENDPOINT_RANGE_MISMATCH");
     }
     if (!tickerMatches) coverageReasons.push("TICKER_MISMATCH");
-    if (!summaryValid || !accumulationValid) coverageReasons.push("SUMMARY_OR_ACCUMULATION_INCOMPLETE");
+    if (!summaryValid || !accumulationValid)
+        coverageReasons.push("SUMMARY_OR_ACCUMULATION_INCOMPLETE");
     if (summaryValid && accumulationValid && missingRequestedDates.length > 0) {
         coverageReasons.push("PROVIDER_DATES_MISSING_NO_ZERO_FILL");
     }
-    const missingReason = Array.from(new Set(coverageReasons)).join("|") || undefined;
-    const commonReturnedStartDate = rangeMatches ? summaryRange.start : undefined;
+    const missingReason =
+        Array.from(new Set(coverageReasons)).join("|") || undefined;
+    const commonReturnedStartDate = rangeMatches
+        ? summaryRange.start
+        : undefined;
     const commonReturnedEndDate = rangeMatches ? summaryRange.end : undefined;
 
     return {
         ...fallback,
-        ticker: String(summaryPayload?.stock_code || accumulationPayload?.code || fallback.ticker)
+        ticker: String(
+            summaryPayload?.stock_code ||
+                accumulationPayload?.code ||
+                fallback.ticker,
+        )
             .toUpperCase()
             .replace(".JK", ""),
         dataSource: "EXTERNAL",
-        sourceLabel: summaryPayload && accumulationPayload
-            ? "External summary + histori broker"
-            : summaryPayload
-              ? "External broker summary (histori tidak tersedia)"
-              : "External histori broker (summary tidak tersedia)",
+        sourceLabel:
+            summaryPayload && accumulationPayload
+                ? "External summary + histori broker"
+                : summaryPayload
+                  ? "External broker summary (histori tidak tersedia)"
+                  : "External histori broker (summary tidak tersedia)",
         sourceNote:
             "Data broker dan histori berasal dari provider eksternal; titik tanpa candle yang cocok tidak digambar.",
         startDate: commonReturnedStartDate || fallback.startDate,
@@ -542,7 +633,9 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
         null,
     );
     const [copyStatus, setCopyStatus] = useState<string | null>(null);
-    const copyStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const copyStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+        null,
+    );
 
     useEffect(() => {
         return () => {
@@ -571,7 +664,8 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
         }
 
         const sourceWidth = sourceCanvas.width > 0 ? sourceCanvas.width : 1200;
-        const sourceHeight = sourceCanvas.height > 0 ? sourceCanvas.height : 520;
+        const sourceHeight =
+            sourceCanvas.height > 0 ? sourceCanvas.height : 520;
         const scale = Math.max(1, sourceWidth / 1200);
         const headerHeight = Math.round(72 * scale);
         const exportCanvas = document.createElement("canvas");
@@ -583,11 +677,12 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
             return;
         }
 
-        const normalizedTicker = ticker
-            .replace(/\.JK$/i, "")
-            .replace(/^\^?JKSE$/i, "IHSG")
-            .toUpperCase()
-            .replace(/[^A-Z0-9-]/g, "") || "STOCK";
+        const normalizedTicker =
+            ticker
+                .replace(/\.JK$/i, "")
+                .replace(/^\^?JKSE$/i, "IHSG")
+                .toUpperCase()
+                .replace(/[^A-Z0-9-]/g, "") || "STOCK";
         const periodStart = startDateStr || "N/A";
         const periodEnd = endDateStr || "N/A";
         const safePeriodStart = periodStart.replace(/[^0-9A-Za-z-]/g, "_");
@@ -611,7 +706,13 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
         );
 
         if (sourceCanvas.width > 0 && sourceCanvas.height > 0) {
-            exportContext.drawImage(sourceCanvas, 0, headerHeight, sourceWidth, sourceHeight);
+            exportContext.drawImage(
+                sourceCanvas,
+                0,
+                headerHeight,
+                sourceWidth,
+                sourceHeight,
+            );
         } else {
             exportContext.fillStyle = "#080c14";
             exportContext.fillRect(0, headerHeight, sourceWidth, sourceHeight);
@@ -687,12 +788,20 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
         }
 
         const startIndex = Math.max(0, candles.length - daysBack);
-        const startDate = normalizeDate(candles[startIndex]?.time || candles[0]?.time || "");
+        const startDate = normalizeDate(
+            candles[startIndex]?.time || candles[0]?.time || "",
+        );
         return { startDateStr: startDate, endDateStr: endDate };
     }, [currentStock, timePreset, customStartDate, customEndDate]);
 
     const emptyInventoryData = useMemo(
-        () => createEmptyInventorySummary(ticker, currentStock, startDateStr, endDateStr),
+        () =>
+            createEmptyInventorySummary(
+                ticker,
+                currentStock,
+                startDateStr,
+                endDateStr,
+            ),
         [ticker, currentStock, startDateStr, endDateStr],
     );
 
@@ -708,7 +817,10 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
         setIsBrokerApiLoading(true);
         setBrokerApiError("");
 
-        const fetchPayload = async <T,>(url: string, label: string): Promise<T> => {
+        const fetchPayload = async <T,>(
+            url: string,
+            label: string,
+        ): Promise<T> => {
             let response = await fetch(url, { signal: controller.signal });
             let body = await response.json().catch(() => null);
 
@@ -739,40 +851,64 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
                 `/api/broker-accumulation?symbol=${encodeURIComponent(ticker)}&start_date=${encodeURIComponent(startDateStr)}&end_date=${encodeURIComponent(endDateStr)}`,
                 "Broker accumulation",
             ),
-        ]).then(([summaryResult, accumulationResult]) => {
-            if (controller.signal.aborted) return;
+        ])
+            .then(([summaryResult, accumulationResult]) => {
+                if (controller.signal.aborted) return;
 
-            const summaryPayload = summaryResult.status === "fulfilled" ? summaryResult.value : null;
-            const accumulationPayload = accumulationResult.status === "fulfilled" ? accumulationResult.value : null;
-            const summaryHasData = Boolean(summaryPayload?.brokers?.length);
-            const accumulationHasData = Boolean(
-                accumulationPayload?.series?.some((entry) => (entry.points || []).length > 0),
-            );
-            const errors = [summaryResult, accumulationResult]
-                .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-                .map((result) => result.reason instanceof Error ? result.reason.message : "Provider tidak tersedia");
-
-            if (!summaryHasData && !accumulationHasData) {
-                setBrokerApiData(null);
-                setBrokerApiError(errors[0] || "Data inventory real tidak tersedia");
-            } else {
-                setBrokerApiData(
-                    buildBrokerDataInventorySummary(
-                        summaryPayload,
-                        accumulationPayload,
-                        emptyInventoryData,
-                        customActiveBrokers,
+                const summaryPayload =
+                    summaryResult.status === "fulfilled"
+                        ? summaryResult.value
+                        : null;
+                const accumulationPayload =
+                    accumulationResult.status === "fulfilled"
+                        ? accumulationResult.value
+                        : null;
+                const summaryHasData = Boolean(summaryPayload?.brokers?.length);
+                const accumulationHasData = Boolean(
+                    accumulationPayload?.series?.some(
+                        (entry) => (entry.points || []).length > 0,
                     ),
                 );
-                setBrokerApiError(errors.join(" · "));
-            }
-        }).catch((error: unknown) => {
-            if (controller.signal.aborted) return;
-            setBrokerApiData(null);
-            setBrokerApiError(error instanceof Error ? error.message : "Data inventory real tidak tersedia");
-        }).finally(() => {
-            if (!controller.signal.aborted) setIsBrokerApiLoading(false);
-        });
+                const errors = [summaryResult, accumulationResult]
+                    .filter(
+                        (result): result is PromiseRejectedResult =>
+                            result.status === "rejected",
+                    )
+                    .map((result) =>
+                        result.reason instanceof Error
+                            ? result.reason.message
+                            : "Provider tidak tersedia",
+                    );
+
+                if (!summaryHasData && !accumulationHasData) {
+                    setBrokerApiData(null);
+                    setBrokerApiError(
+                        errors[0] || "Data inventory real tidak tersedia",
+                    );
+                } else {
+                    setBrokerApiData(
+                        buildBrokerDataInventorySummary(
+                            summaryPayload,
+                            accumulationPayload,
+                            emptyInventoryData,
+                            customActiveBrokers,
+                        ),
+                    );
+                    setBrokerApiError(errors.join(" · "));
+                }
+            })
+            .catch((error: unknown) => {
+                if (controller.signal.aborted) return;
+                setBrokerApiData(null);
+                setBrokerApiError(
+                    error instanceof Error
+                        ? error.message
+                        : "Data inventory real tidak tersedia",
+                );
+            })
+            .finally(() => {
+                if (!controller.signal.aborted) setIsBrokerApiLoading(false);
+            });
 
         return () => controller.abort();
     }, [
@@ -802,33 +938,49 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
     ]);
 
     const inventoryNaraSummary = useMemo(
-        () => buildInventoryNaraSummary({
-            summary: {
-                ...inventoryData,
-                coverage: inventoryData.coverage
-                    ? { ...inventoryData.coverage, selectedBrokerCodes: [...activeBrokerCodes].sort() }
-                    : inventoryData.coverage,
-            },
-            candles: inventoryData.candles,
-            selectedBrokerCodes: activeBrokerCodes,
-            asOfDate: endDateStr,
-        }),
+        () =>
+            buildInventoryNaraSummary({
+                summary: {
+                    ...inventoryData,
+                    coverage: inventoryData.coverage
+                        ? {
+                              ...inventoryData.coverage,
+                              selectedBrokerCodes: [
+                                  ...activeBrokerCodes,
+                              ].sort(),
+                          }
+                        : inventoryData.coverage,
+                },
+                candles: inventoryData.candles,
+                selectedBrokerCodes: activeBrokerCodes,
+                asOfDate: endDateStr,
+            }),
         [inventoryData, activeBrokerCodes, endDateStr],
     );
 
     const inventoryNaraMeta = useMemo(() => {
-        const selected = new Set(activeBrokerCodes.map((code) => code.toUpperCase()));
+        const selected = new Set(
+            activeBrokerCodes.map((code) => code.toUpperCase()),
+        );
         const selectedPoints = inventoryData.allBrokers
             .filter((broker) => selected.has(broker.brokerCode.toUpperCase()))
             .flatMap((broker) => broker.dailyPoints);
-        const candleDates = new Set(inventoryData.candles.map((candle) => normalizeDate(candle.time)));
+        const candleDates = new Set(
+            inventoryData.candles.map((candle) => normalizeDate(candle.time)),
+        );
         return {
             selectedBrokerCount: selected.size,
             requestedStartDate: inventoryData.startDate,
             requestedEndDate: inventoryData.endDate,
-            validPointCount: selectedPoints.filter((point) => candleDates.has(normalizeDate(point.date))).length,
-            missingDateCount: inventoryData.coverage?.missingRequestedDates.length || 0,
-            source: inventoryData.coverage?.source || inventoryData.dataSource || "UNKNOWN",
+            validPointCount: selectedPoints.filter((point) =>
+                candleDates.has(normalizeDate(point.date)),
+            ).length,
+            missingDateCount:
+                inventoryData.coverage?.missingRequestedDates.length || 0,
+            source:
+                inventoryData.coverage?.source ||
+                inventoryData.dataSource ||
+                "UNKNOWN",
         };
     }, [inventoryData, activeBrokerCodes]);
 
@@ -1273,11 +1425,17 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
             const alignedPoints = broker.dailyPoints
                 .map((point) => ({
                     point,
-                    candleIndex: candleIndexByDate.get(normalizeDate(point.date)),
+                    candleIndex: candleIndexByDate.get(
+                        normalizeDate(point.date),
+                    ),
                 }))
                 .filter(
-                    (entry): entry is { point: typeof broker.dailyPoints[number]; candleIndex: number } =>
-                        entry.candleIndex !== undefined,
+                    (
+                        entry,
+                    ): entry is {
+                        point: (typeof broker.dailyPoints)[number];
+                        candleIndex: number;
+                    } => entry.candleIndex !== undefined,
                 )
                 .sort((a, b) => a.candleIndex - b.candleIndex);
             if (alignedPoints.length === 0) return;
@@ -1290,7 +1448,8 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
             alignedPoints.forEach(({ point, candleIndex }, idx) => {
                 const x = getCandleX(candleIndex);
                 const y = getInvY(point.cumNetVol);
-                const previousIndex = idx > 0 ? alignedPoints[idx - 1].candleIndex : null;
+                const previousIndex =
+                    idx > 0 ? alignedPoints[idx - 1].candleIndex : null;
                 // Keep the real curve visually continuous across provider date gaps.
                 // Missing dates are not filled with synthetic zero-valued points.
                 if (previousIndex === null) {
@@ -1718,7 +1877,8 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
                                     className={`px-2 py-0.5 rounded border text-[10px] font-bold ${
                                         isBrokerApiLoading
                                             ? "border-cyan-500/30 bg-cyan-500/10 text-cyan-300"
-                                            : inventoryData.dataSource === "EXTERNAL"
+                                            : inventoryData.dataSource ===
+                                                "EXTERNAL"
                                               ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
                                               : "border-rose-500/30 bg-rose-500/10 text-rose-300"
                                     }`}
@@ -1750,34 +1910,36 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
 
                             {/* Foreign Flow Badge */}
                             {inventoryData.dataSource === "EXTERNAL" ? (
-                            <div className="flex items-center gap-2">
-                                <span className="text-slate-400">
-                                    Foreign Net:
-                                </span>
-                                <span
-                                    className={`font-bold px-2 py-0.5 rounded ${
-                                        inventoryData.stats.foreignNetVol >= 0
-                                            ? "bg-emerald-500/20 text-emerald-400"
-                                            : "bg-rose-500/20 text-rose-400"
-                                    }`}
-                                >
-                                    {inventoryData.stats.foreignNetVol >= 0
-                                        ? "+"
-                                        : ""}
-                                    {Math.round(
-                                        inventoryData.stats.foreignNetVol,
-                                    ).toLocaleString()}{" "}
-                                    Lot (
-                                    {inventoryData.stats.foreignNetVal >= 0
-                                        ? "+"
-                                        : ""}
-                                    Rp{" "}
-                                    {(
-                                        inventoryData.stats.foreignNetVal / 1e9
-                                    ).toFixed(2)}{" "}
-                                    M)
-                                </span>
-                            </div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-slate-400">
+                                        Foreign Net:
+                                    </span>
+                                    <span
+                                        className={`font-bold px-2 py-0.5 rounded ${
+                                            inventoryData.stats.foreignNetVol >=
+                                            0
+                                                ? "bg-emerald-500/20 text-emerald-400"
+                                                : "bg-rose-500/20 text-rose-400"
+                                        }`}
+                                    >
+                                        {inventoryData.stats.foreignNetVol >= 0
+                                            ? "+"
+                                            : ""}
+                                        {Math.round(
+                                            inventoryData.stats.foreignNetVol,
+                                        ).toLocaleString()}{" "}
+                                        Lot (
+                                        {inventoryData.stats.foreignNetVal >= 0
+                                            ? "+"
+                                            : ""}
+                                        Rp{" "}
+                                        {(
+                                            inventoryData.stats.foreignNetVal /
+                                            1e9
+                                        ).toFixed(2)}{" "}
+                                        M)
+                                    </span>
+                                </div>
                             ) : (
                                 <span className="text-rose-300 text-[10px]">
                                     Ringkasan foreign real tidak tersedia
@@ -1866,10 +2028,18 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
                                                     )
                                                     .slice(0, 4)
                                                     .map((b) => {
-                                                        const activeDate = normalizeDate(activeCandle.time);
-                                                        const dp = b.dailyPoints.find(
-                                                            (point) => normalizeDate(point.date) === activeDate,
-                                                        );
+                                                        const activeDate =
+                                                            normalizeDate(
+                                                                activeCandle.time,
+                                                            );
+                                                        const dp =
+                                                            b.dailyPoints.find(
+                                                                (point) =>
+                                                                    normalizeDate(
+                                                                        point.date,
+                                                                    ) ===
+                                                                    activeDate,
+                                                            );
                                                         if (!dp) return null;
                                                         return (
                                                             <span
@@ -1941,7 +2111,20 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
                 </div>
 
                 {/* Right 4 Cols: 2 Classes Panel (Top 5 Net Buy & Top 5 Net Sell) */}
-                <div className="lg:col-span-4 lg:sticky lg:top-[76px] lg:self-start lg:max-h-[calc(100vh-92px)] lg:overflow-y-auto space-y-4">
+                <div
+                    className="
+    lg:col-span-4
+    lg:sticky
+    lg:top-[76px]
+    lg:self-start
+    lg:max-h-[calc(100vh-92px)]
+    lg:overflow-y-auto
+    lg:[scrollbar-width:none]
+    lg:[&::-webkit-scrollbar]:hidden
+    space-y-4
+"
+                >
+                    {" "}
                     {/* Panel Card */}
                     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-2xl space-y-4">
                         {/* Panel Header & Broker Search */}
@@ -2014,7 +2197,9 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
                                 <div className="text-[11px] text-slate-400 font-mono flex items-center justify-between pb-1 border-b border-slate-800/80">
                                     <span className="text-emerald-400 font-bold flex items-center gap-1">
                                         <ArrowUpRight className="w-3.5 h-3.5" />
-                                        <span>Net Accumulation - Selected Period</span>
+                                        <span>
+                                            Net Accumulation - Selected Period
+                                        </span>
                                     </span>
                                     <span className="text-slate-500 text-right">
                                         Signed flow, bukan saldo custody
@@ -2211,7 +2396,8 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
                                         </div>
                                     </div>
 
-                                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                                        {" "}
                                         {displayedBuyers.length === 0 ? (
                                             <div className="text-xs text-slate-500 py-3 text-center">
                                                 Tidak ada data broker net buy.
@@ -2350,7 +2536,8 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
                                         </div>
                                     </div>
 
-                                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                                        {" "}
                                         {displayedSellers.length === 0 ? (
                                             <div className="text-xs text-slate-500 py-3 text-center">
                                                 Tidak ada data broker net sell.
@@ -2459,7 +2646,6 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
                             </>
                         )}
                     </div>
-
                     {/* Educational Footnote */}
                     <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3.5 text-xs text-slate-400 space-y-2 leading-relaxed">
                         <div className="font-bold text-slate-200 flex items-center gap-1.5">
