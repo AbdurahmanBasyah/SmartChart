@@ -372,6 +372,10 @@ export interface StockData {
   changePercent24h: number;
   isRealData?: boolean;
   naraSummary?: NaraSummary;
+  source?: 'YAHOO' | 'SYNTHETIC' | 'UNKNOWN';
+  fetchedAt?: string;
+  tradeDate?: string;
+  snapshotSchemaVersion?: number;
 }
 
 export interface ScreenerFilter {

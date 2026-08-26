@@ -2,6 +2,7 @@
 
 import type { NaraSummary } from '../../src/types';
 import { buildChartNaraSummary } from '../../src/utils/naraEvidenceEngine';
+import type { RawOhlcvSnapshot } from './rawOhlcvSnapshot.js';
 
 export interface Candle {
   time: string; // YYYY-MM-DD
@@ -154,6 +155,10 @@ export interface StockData {
   changePercent24h: number;
   isRealData?: boolean;
   naraSummary?: NaraSummary;
+  source?: 'YAHOO' | 'SYNTHETIC' | 'UNKNOWN';
+  fetchedAt?: string;
+  tradeDate?: string;
+  snapshotSchemaVersion?: number;
 }
 
 export interface StockRawConfig {
@@ -1303,6 +1308,26 @@ export function buildStockData(
   return stockData;
 }
 
+export function buildStockDataFromRawSnapshot(snapshot: RawOhlcvSnapshot): StockData {
+  const metadata = liquidIDXStocks.find(
+    (stock) => stock.t === snapshot.ticker,
+  );
+  const stockData = buildStockData(
+    snapshot.symbol,
+    snapshot.ticker,
+    metadata?.n ?? `${snapshot.ticker} Tbk.`,
+    metadata?.s ?? 'IDX Market',
+    snapshot.candles,
+    metadata?.cg,
+    true,
+  );
+  stockData.source = snapshot.source;
+  stockData.fetchedAt = snapshot.fetchedAt;
+  stockData.tradeDate = snapshot.tradeDate;
+  stockData.snapshotSchemaVersion = snapshot.schemaVersion;
+  return stockData;
+}
+
 export const liquidIDXStocks: StockRawConfig[] = [
   { t: "IHSG", n: "Indeks Harga Saham Gabungan (IHSG)", s: "Market Index", p: 7350, cg: "Bursa Efek Indonesia" },
   { t: "BREN", n: "PT Barito Renewables Energy Tbk.", s: "Energy", p: 7250, cg: "Prajogo Pangestu" },
@@ -1519,6 +1544,9 @@ export async function fetchYahooStockDataServer(ticker: string): Promise<StockDa
     }
 
     const stockData = buildStockData(yahooSymbol, displayTicker, stockName, sector, candles, conglomerate, true);
+    stockData.source = 'YAHOO';
+    stockData.fetchedAt = new Date().toISOString();
+    stockData.tradeDate = candles[candles.length - 1]?.time;
     serverCache.set(cleanTicker, { data: stockData, timestamp: Date.now() });
     serverCache.set(displayTicker, { data: stockData, timestamp: Date.now() });
     return stockData;
@@ -1527,7 +1555,11 @@ export async function fetchYahooStockDataServer(ticker: string): Promise<StockDa
     // Return mock fallback on error
     const baseP = stockMeta ? stockMeta.p : 1000;
     const fallbackCandles = generateCandles(baseP, 0.025, 0.001, 90);
-    return buildStockData(yahooSymbol, displayTicker, stockName, sector, fallbackCandles, conglomerate, false);
+    const fallback = buildStockData(yahooSymbol, displayTicker, stockName, sector, fallbackCandles, conglomerate, false);
+    fallback.source = 'SYNTHETIC';
+    fallback.fetchedAt = new Date().toISOString();
+    fallback.tradeDate = fallbackCandles[fallbackCandles.length - 1]?.time;
+    return fallback;
   }
 }
 

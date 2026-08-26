@@ -1,4 +1,5 @@
 import { fetchYahooStockDataServer, getMockStocks, buildStockData, generateCandles } from './_lib/stockEngine.js';
+import { readLatestStockFromRedis } from './_lib/stockReadPath.js';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -14,7 +15,12 @@ export default async function handler(req: any, res: any) {
 
   try {
     // Support query param ?symbol=... or URL path param
-    const symbolQuery = req?.query?.symbol || req?.query?.ticker || req?.query?.s || 'IHSG';
+    const pathParts = String(req?.url || "")
+      .split("?")[0]
+      .split("/")
+      .filter(Boolean)
+    const pathTicker = pathParts.length > 2 ? pathParts[pathParts.length - 1] : undefined;
+    const symbolQuery = req?.query?.symbol || req?.query?.ticker || req?.query?.s || pathTicker || 'IHSG';
     const rawSymbol = Array.isArray(symbolQuery) ? symbolQuery[0] : String(symbolQuery);
 
     let cleanSymbol = rawSymbol;
@@ -30,6 +36,23 @@ export default async function handler(req: any, res: any) {
     }
 
     const yahooSymbol = cleanTicker.startsWith('^') ? cleanTicker : `${cleanTicker}.JK`;
+
+    // Durable raw OHLCV is the preferred source. Analysis is built lazily and
+    // cached by engine version; Redis credentials never leave this server path.
+    try {
+      const snapshotStock = await readLatestStockFromRedis(cleanTicker);
+      if (snapshotStock && snapshotStock.candles.length > 0) {
+        if (req.method === 'GET') {
+          res.removeHeader('Pragma');
+          res.removeHeader('Expires');
+          res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+          res.setHeader('Vercel-CDN-Cache-Control', 'public, s-maxage=300, stale-while-revalidate=3600');
+        }
+        return res.status(200).json(snapshotStock);
+      }
+    } catch {
+      // Redis is optional during local development; retain the existing path.
+    }
 
     // 1. Try fetching real market data from Yahoo Finance API via serverless function
     try {

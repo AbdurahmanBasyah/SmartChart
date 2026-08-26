@@ -23,6 +23,7 @@ import {
     Loader2,
     Table,
     LayoutGrid,
+    Camera,
 } from "lucide-react";
 import {
     StockData,
@@ -540,6 +541,125 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
     const [hoveredCandleIndex, setHoveredCandleIndex] = useState<number | null>(
         null,
     );
+    const [copyStatus, setCopyStatus] = useState<string | null>(null);
+    const copyStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (copyStatusTimerRef.current) {
+                clearTimeout(copyStatusTimerRef.current);
+            }
+        };
+    }, []);
+
+    const announceCopyStatus = (status: string) => {
+        if (copyStatusTimerRef.current) {
+            clearTimeout(copyStatusTimerRef.current);
+        }
+        setCopyStatus(status);
+        copyStatusTimerRef.current = setTimeout(() => {
+            setCopyStatus(null);
+            copyStatusTimerRef.current = null;
+        }, 2500);
+    };
+
+    const handleCopyInventoryImage = () => {
+        const sourceCanvas = canvasRef.current;
+        if (!sourceCanvas) {
+            announceCopyStatus("Chart belum siap");
+            return;
+        }
+
+        const sourceWidth = sourceCanvas.width > 0 ? sourceCanvas.width : 1200;
+        const sourceHeight = sourceCanvas.height > 0 ? sourceCanvas.height : 520;
+        const scale = Math.max(1, sourceWidth / 1200);
+        const headerHeight = Math.round(72 * scale);
+        const exportCanvas = document.createElement("canvas");
+        exportCanvas.width = sourceWidth;
+        exportCanvas.height = sourceHeight + headerHeight;
+        const exportContext = exportCanvas.getContext("2d");
+        if (!exportContext) {
+            announceCopyStatus("Copy gagal");
+            return;
+        }
+
+        const normalizedTicker = ticker
+            .replace(/\.JK$/i, "")
+            .replace(/^\^?JKSE$/i, "IHSG")
+            .toUpperCase()
+            .replace(/[^A-Z0-9-]/g, "") || "STOCK";
+        const periodStart = startDateStr || "N/A";
+        const periodEnd = endDateStr || "N/A";
+        const safePeriodStart = periodStart.replace(/[^0-9A-Za-z-]/g, "_");
+        const safePeriodEnd = periodEnd.replace(/[^0-9A-Za-z-]/g, "_");
+        exportContext.fillStyle = "#0f172a";
+        exportContext.fillRect(0, 0, sourceWidth, headerHeight);
+        exportContext.fillStyle = "#22d3ee";
+        exportContext.font = `700 ${Math.max(16, Math.round(18 * scale))}px Inter, sans-serif`;
+        exportContext.textAlign = "left";
+        exportContext.fillText(
+            `${normalizedTicker} · Inventory Chart`,
+            Math.round(24 * scale),
+            Math.round(30 * scale),
+        );
+        exportContext.fillStyle = "#cbd5e1";
+        exportContext.font = `${Math.max(11, Math.round(12 * scale))}px JetBrains Mono, monospace`;
+        exportContext.fillText(
+            `Periode: ${periodStart} – ${periodEnd}`,
+            Math.round(24 * scale),
+            Math.round(54 * scale),
+        );
+
+        if (sourceCanvas.width > 0 && sourceCanvas.height > 0) {
+            exportContext.drawImage(sourceCanvas, 0, headerHeight, sourceWidth, sourceHeight);
+        } else {
+            exportContext.fillStyle = "#080c14";
+            exportContext.fillRect(0, headerHeight, sourceWidth, sourceHeight);
+            exportContext.fillStyle = "#64748b";
+            exportContext.font = `${Math.max(12, Math.round(14 * scale))}px Inter, sans-serif`;
+            exportContext.textAlign = "center";
+            exportContext.fillText(
+                "Tidak ada data candle untuk rentang tanggal ini.",
+                sourceWidth / 2,
+                headerHeight + sourceHeight / 2,
+            );
+        }
+
+        exportCanvas.toBlob(async (blob) => {
+            if (!blob) {
+                announceCopyStatus("Copy gagal");
+                return;
+            }
+            try {
+                if (
+                    typeof navigator !== "undefined" &&
+                    navigator.clipboard?.write &&
+                    typeof ClipboardItem !== "undefined"
+                ) {
+                    await navigator.clipboard.write([
+                        new ClipboardItem({ "image/png": blob }),
+                    ]);
+                    announceCopyStatus("Copied to Clipboard!");
+                    return;
+                }
+                throw new Error("Clipboard PNG tidak didukung");
+            } catch {
+                try {
+                    const url = URL.createObjectURL(blob);
+                    const anchor = document.createElement("a");
+                    anchor.href = url;
+                    anchor.download = `${normalizedTicker}_Inventory_${safePeriodStart}_${safePeriodEnd}.png`;
+                    document.body.appendChild(anchor);
+                    anchor.click();
+                    anchor.remove();
+                    URL.revokeObjectURL(url);
+                    announceCopyStatus("Image Downloaded");
+                } catch {
+                    announceCopyStatus("Copy gagal");
+                }
+            }
+        }, "image/png");
+    };
 
     // Calculate start & end date strings based on preset
     const { startDateStr, endDateStr } = useMemo(() => {
@@ -1541,6 +1661,16 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
                                     <Plus className="w-3 h-3 text-cyan-400" />
                                     <span>Tambah Broker</span>
                                 </button>
+
+                                <button
+                                    type="button"
+                                    onClick={handleCopyInventoryImage}
+                                    className="px-2.5 py-1 rounded-lg text-xs font-bold font-mono transition-all flex items-center gap-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 cursor-pointer"
+                                    title="Salin unified Inventory Chart sebagai PNG"
+                                >
+                                    <Camera className="w-3.5 h-3.5 text-emerald-400" />
+                                    <span>{copyStatus || "Salin Gambar"}</span>
+                                </button>
                             </div>
 
                             {/* Active Broker Legend Chips */}
@@ -1811,7 +1941,7 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
                 </div>
 
                 {/* Right 4 Cols: 2 Classes Panel (Top 5 Net Buy & Top 5 Net Sell) */}
-                <div className="lg:col-span-4 space-y-4">
+                <div className="lg:col-span-4 lg:sticky lg:top-[76px] lg:self-start lg:max-h-[calc(100vh-92px)] lg:overflow-y-auto space-y-4">
                     {/* Panel Card */}
                     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-2xl space-y-4">
                         {/* Panel Header & Broker Search */}

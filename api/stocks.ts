@@ -1,4 +1,5 @@
 import { getAllStocksServer } from './_lib/stockEngine.js';
+import { readStocksFromRedis } from './_lib/stockReadPath.js';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -13,7 +14,14 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const stocks = await getAllStocksServer();
+    let stocks;
+    try {
+      stocks = await readStocksFromRedis();
+    } catch {
+      // Redis is unavailable or not configured: preserve the existing
+      // in-memory/mock response with its honest fallback flags.
+      stocks = await getAllStocksServer();
+    }
     if (req.method === 'GET') {
       res.removeHeader('Pragma');
       res.removeHeader('Expires');
