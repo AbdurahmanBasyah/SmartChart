@@ -1,7 +1,6 @@
 import {
-  getRawRequestBody,
+  authenticateQstashRequest,
   parseRequestBody,
-  verifyQstashRequest,
 } from "../../_lib/qstash.js";
 import { fetchYahooRawOhlcv } from "../../_lib/rawOhlcvSnapshot.js";
 import {
@@ -11,6 +10,8 @@ import {
 } from "../../_lib/stockSync.js";
 import { getSnapshotRepository } from "../../_lib/redisSnapshotStore.js";
 
+export const config = { api: { bodyParser: false } };
+
 export default async function handler(req: any, res: any) {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -18,11 +19,11 @@ export default async function handler(req: any, res: any) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "METHOD_NOT_ALLOWED" });
 
-  const rawBody = getRawRequestBody(req);
-  const verification = await verifyQstashRequest(req, rawBody);
-  if (!verification.ok) {
-    return res.status(verification.status).json({ error: verification.code });
+  const authentication = await authenticateQstashRequest(req);
+  if (authentication.ok === false) {
+    return res.status(authentication.status).json({ error: authentication.code });
   }
+  const { rawBody } = authentication;
 
   let body: unknown;
   try {
