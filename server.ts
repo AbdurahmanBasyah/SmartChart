@@ -2,9 +2,10 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { getMockStocks, buildStockData, generateCandles, liquidIDXStocks } from './src/data/mockStocks';
+import { liquidIDXStocks } from './src/data/mockStocks';
 import { fetchYahooStockData } from './src/services/yahooFinance';
-import { StockData } from './src/types';
+import type { StockData, StockUniverseCoverage, StockUniverseItem } from './src/types';
+import { normalizeUniverseTicker } from './shared/stockUniverse';
 import {
   fetchBrokerDataAccumulation,
   fetchBrokerDataSummary,
@@ -19,29 +20,111 @@ async function startServer() {
 
   // Cache initial stock data in memory
   let stockCache: Map<string, StockData> = new Map();
+  const allowExplicitDevMocks = process.env.NODE_ENV !== 'production' && process.env.SMARTCHART_DEV_MOCKS === 'true';
 
-  function refreshLocalFallback() {
+  function cacheStock(stock: StockData): void {
+    stockCache.set(stock.ticker.toUpperCase(), stock);
+    stockCache.set(stock.symbol.toUpperCase(), stock);
+    if (normalizeUniverseTicker(stock.ticker) === 'IHSG') {
+      stockCache.set('IHSG', stock);
+      stockCache.set('JKSE', stock);
+      stockCache.set('^JKSE', stock);
+    }
+  }
+
+  function compactStock(stock: StockData, source: 'YAHOO' | 'SYNTHETIC'): StockUniverseItem {
+    const recommendation = stock.recommendation;
+    return {
+      symbol: stock.symbol,
+      ticker: normalizeUniverseTicker(stock.ticker),
+      name: stock.name,
+      sector: stock.sector,
+      conglomerate: stock.conglomerate,
+      currentPrice: stock.currentPrice,
+      change24h: stock.change24h,
+      changePercent24h: stock.changePercent24h,
+      recommendation: {
+        structure: recommendation.structure,
+        entryZone: recommendation.entryZone,
+        stopLoss: recommendation.stopLoss,
+        stopLossPercent: recommendation.stopLossPercent,
+        takeProfit1: recommendation.takeProfit1,
+        takeProfit1Percent: recommendation.takeProfit1Percent,
+        takeProfit2: recommendation.takeProfit2,
+        takeProfit2Percent: recommendation.takeProfit2Percent,
+        riskRewardRatio: recommendation.riskRewardRatio,
+        volumeConfirmation: recommendation.volumeConfirmation,
+        volumeRatio: recommendation.volumeRatio,
+        status: recommendation.status,
+        primaryZoneType: recommendation.primaryZoneType,
+        primaryZonePrice: recommendation.primaryZonePrice,
+        isOnBuyArea: recommendation.isOnBuyArea,
+      },
+      source,
+      isRealData: source === 'YAHOO',
+      tradeDate: stock.tradeDate,
+      fetchedAt: stock.fetchedAt,
+      freshness: 'UNKNOWN',
+    };
+  }
+
+  function compactCachedUniverse(): {
+    items: StockUniverseItem[];
+    coverage: StockUniverseCoverage;
+    source: 'YAHOO' | 'SYNTHETIC' | 'MIXED' | 'UNKNOWN';
+  } {
+    const items: StockUniverseItem[] = [];
+    for (const config of liquidIDXStocks) {
+      const ticker = normalizeUniverseTicker(config.t);
+      const stock = stockCache.get(ticker) || (ticker === 'IHSG' ? stockCache.get('^JKSE') : undefined);
+      if (!stock || (!allowExplicitDevMocks && stock.isRealData !== true)) continue;
+      items.push(compactStock(stock, stock.isRealData === true ? 'YAHOO' : 'SYNTHETIC'));
+    }
+    const availableTickers = new Set(items.map((item) => item.ticker));
+    const expected = liquidIDXStocks.length;
+    const sources = new Set(items.map((item) => item.source));
+    const logicalDates = items
+      .map((item) => item.tradeDate)
+      .filter((date): date is string => Boolean(date));
+    const source = items.length === 0
+      ? 'UNKNOWN'
+      : sources.size > 1
+      ? 'MIXED'
+      : Array.from(sources)[0] as 'YAHOO' | 'SYNTHETIC';
+    return {
+      items,
+      coverage: {
+        expected,
+        available: items.length,
+        missing: liquidIDXStocks
+          .map((config) => normalizeUniverseTicker(config.t))
+          .filter((ticker) => !availableTickers.has(ticker)),
+        partial: items.length < expected,
+        asOfDate: logicalDates.sort().at(-1),
+        fetchedAt: new Date().toISOString(),
+      },
+      source,
+    };
+  }
+
+  async function refreshLocalFallback() {
+    if (!allowExplicitDevMocks) return;
+    const { getMockStocks } = await import('./src/data/mockStocks');
     const stocks = getMockStocks();
     stocks.forEach((s) => {
-      stockCache.set(s.ticker.toUpperCase(), s);
-      stockCache.set(s.symbol.toUpperCase(), s);
-      if (s.ticker === '^JKSE' || s.ticker === 'IHSG') {
-        stockCache.set('IHSG', s);
-        stockCache.set('JKSE', s);
-        stockCache.set('^JKSE', s);
-      }
+      cacheStock(s);
     });
   }
 
   // Pre-fetch real Yahoo Finance market data in background for liquid IDX tickers
   async function preloadRealMarketData() {
-    const priorityTickers = [
-      '^JKSE', 'BRPT', 'BBCA', 'BBRI', 'BMRI', 'ADRO', 'BUMI', 'CUAN', 'BREN', 'GOTO',
-      'TLKM', 'ASII', 'ANTM', 'AMMN', 'TPIA', 'INDF', 'PANI', 'PTRO', 'MDKA', 'ICBP',
-      'UNVR', 'KLBF', 'CPIN', 'MEDC', 'PGAS', 'HRUM', 'ITMG', 'PTBA', 'WIFI', 'INET'
-    ];
-    const allTickers = liquidIDXStocks.map((s) => s.t === 'IHSG' ? '^JKSE' : s.t);
-    const remainingTickers = Array.from(new Set(allTickers.filter((t) => !priorityTickers.includes(t) && t !== 'IHSG')));
+    const allTickers = Array.from(new Set(
+      liquidIDXStocks.map((stock) => stock.t === 'IHSG' ? '^JKSE' : stock.t),
+    ));
+    // Warm the first canonical slice immediately, then continue in bounded
+    // batches. The source-of-truth list remains the only ticker population.
+    const priorityTickers = allTickers.slice(0, Math.min(30, allTickers.length));
+    const remainingTickers = allTickers.slice(priorityTickers.length);
 
     console.log(`Pre-loading real market data from Yahoo Finance for ${allTickers.length} stocks...`);
     // 1. Fetch primary tickers immediately in parallel
@@ -49,15 +132,7 @@ async function startServer() {
       priorityTickers.map(async (t) => {
         try {
           const realData = await fetchYahooStockData(t);
-          if (realData && realData.candles && realData.candles.length > 0) {
-            stockCache.set(realData.ticker.toUpperCase(), realData);
-            stockCache.set(realData.symbol.toUpperCase(), realData);
-            if (realData.ticker === '^JKSE' || realData.ticker === 'IHSG') {
-              stockCache.set('IHSG', realData);
-              stockCache.set('JKSE', realData);
-              stockCache.set('^JKSE', realData);
-            }
-          }
+          if (realData && realData.candles && realData.candles.length > 0) cacheStock(realData);
         } catch (err) {
           console.warn(`Failed preloading priority data for ${t}:`, err);
         }
@@ -71,11 +146,8 @@ async function startServer() {
       await Promise.allSettled(
         batch.map(async (t) => {
           try {
-            const realData = await fetchYahooStockData(t);
-            if (realData && realData.candles && realData.candles.length > 0) {
-              stockCache.set(realData.ticker.toUpperCase(), realData);
-              stockCache.set(realData.symbol.toUpperCase(), realData);
-            }
+          const realData = await fetchYahooStockData(t);
+            if (realData && realData.candles && realData.candles.length > 0) cacheStock(realData);
           } catch (err) {
             console.warn(`Failed preloading data for ${t}:`, err);
           }
@@ -88,7 +160,7 @@ async function startServer() {
   console.log('Initializing Express app and routes...');
   
   // Populate local stock cache synchronously on boot
-  refreshLocalFallback();
+  void refreshLocalFallback();
 
   // No-cache middleware for dynamic API routes
   app.use('/api', (req, res, next) => {
@@ -115,17 +187,21 @@ async function startServer() {
 
   // Get all stocks summary
   app.get('/api/stocks', async (req, res) => {
-    const stockMap = new Map<string, StockData>();
-    stockCache.forEach((stock) => {
-      if (stock && stock.ticker) {
-        const isIhsg = stock.ticker === '^JKSE' || stock.ticker === 'JKSE' || stock.ticker === 'IHSG';
-        const displayTicker = isIhsg ? 'IHSG' : stock.ticker;
-        const formatted = { ...stock, ticker: displayTicker };
-        stockMap.set(displayTicker.toUpperCase(), formatted);
-      }
-    });
+    const universe = compactCachedUniverse();
+    if (universe.items.length === 0 && !allowExplicitDevMocks) {
+      return res.status(503).json({
+        success: false,
+        error: 'REAL_STOCK_DATA_UNAVAILABLE',
+        coverage: universe.coverage,
+      });
+    }
     setSuccessfulGetCache(res, 900, 86400);
-    res.json(Array.from(stockMap.values()));
+    res.json({
+      success: true,
+      source: universe.source,
+      data: universe.items,
+      coverage: universe.coverage,
+    });
   });
 
   // Force refresh real data route
@@ -142,14 +218,13 @@ async function startServer() {
     if (cleanTicker === 'IHSG' || cleanTicker === 'JKSE' || cleanTicker === '^JKSE') {
       cleanTicker = '^JKSE';
     }
-    const yahooSymbol = cleanTicker.startsWith('^') ? cleanTicker : `${cleanTicker}.JK`;
+    const yahooSymbol = cleanTicker === '^JKSE' ? '^JKSE' : `${cleanTicker}.JK`;
 
     // 1. Always attempt to fetch live/delayed Yahoo Finance API data first
     try {
       const realData = await fetchYahooStockData(cleanTicker);
       if (realData && realData.candles && realData.candles.length > 0) {
-        stockCache.set(cleanTicker, realData);
-        stockCache.set(yahooSymbol, realData);
+        cacheStock(realData);
         if (cleanTicker === '^JKSE') {
           stockCache.set('IHSG', realData);
           stockCache.set('JKSE', realData);
@@ -163,34 +238,31 @@ async function startServer() {
     }
 
     // 2. Check local cache if Yahoo Finance call failed or rate limited
-    if (stockCache.has(cleanTicker)) {
+    const cachedDirect = stockCache.get(cleanTicker);
+    if (cachedDirect && (cachedDirect.isRealData === true || allowExplicitDevMocks)) {
       setSuccessfulGetCache(res, 300, 3600);
-      return res.json(stockCache.get(cleanTicker));
+      return res.json(cachedDirect);
     }
     if (cleanTicker === '^JKSE') {
-      if (stockCache.has('^JKSE')) {
+      const cachedIndex = stockCache.get('^JKSE');
+      if (cachedIndex && (cachedIndex.isRealData === true || allowExplicitDevMocks)) {
         setSuccessfulGetCache(res, 300, 3600);
-        return res.json(stockCache.get('^JKSE'));
+        return res.json(cachedIndex);
       }
-      if (stockCache.has('IHSG')) {
+      const cachedIhsg = stockCache.get('IHSG');
+      if (cachedIhsg && (cachedIhsg.isRealData === true || allowExplicitDevMocks)) {
         setSuccessfulGetCache(res, 300, 3600);
-        return res.json(stockCache.get('IHSG'));
+        return res.json(cachedIhsg);
       }
     }
 
-    // 3. Dynamic generator fallback for unknown tickers
-    const fallbackCandles = generateCandles(1500, 0.03, 0.001, 90);
-    const fallbackStock = buildStockData(
-      yahooSymbol,
-      cleanTicker,
-      `${cleanTicker} Indonesia Tbk.`,
-      'IDX Market',
-      fallbackCandles
-    );
-
-    stockCache.set(cleanTicker, fallbackStock);
-    setSuccessfulGetCache(res, 300, 3600);
-    return res.json(fallbackStock);
+    // Development mocks are only served when explicitly enabled. Production
+    // never substitutes a generated ticker or BUMI for an unavailable symbol.
+    return res.status(503).json({
+        success: false,
+        error: 'REAL_STOCK_DATA_UNAVAILABLE',
+        ticker: normalizeUniverseTicker(cleanTicker),
+      });
   };
 
   app.get('/api/stock', handleStockRequest);
@@ -198,11 +270,18 @@ async function startServer() {
 
   // Screener route
   app.get('/api/screener', (req, res) => {
-    const list = Array.from(new Set(Array.from(stockCache.values())));
+    const universe = compactCachedUniverse();
+    if (universe.items.length === 0 && !allowExplicitDevMocks) {
+      return res.status(503).json({
+        success: false,
+        error: 'REAL_STOCK_DATA_UNAVAILABLE',
+        coverage: universe.coverage,
+      });
+    }
 
     const { structure, minRr, volumeOnly } = req.query;
 
-    let filtered = list;
+    let filtered = universe.items;
 
     if (structure && structure !== 'ALL') {
       filtered = filtered.filter((s) => s.recommendation.structure === structure);
@@ -218,7 +297,13 @@ async function startServer() {
     }
 
     setSuccessfulGetCache(res, 900, 86400);
-    res.json(filtered);
+    res.json({
+      success: true,
+      source: universe.source,
+      data: filtered,
+      filteredCount: filtered.length,
+      coverage: universe.coverage,
+    });
   });
 
   // Broker Inventory Data API
@@ -577,8 +662,9 @@ async function startServer() {
     
     // Perform initial stock market data prefetching asynchronously in background
     setTimeout(() => {
-      refreshLocalFallback();
-      preloadRealMarketData().catch((err) => console.error('Background preload error:', err));
+      void refreshLocalFallback()
+        .then(() => preloadRealMarketData())
+        .catch((err) => console.error('Background preload error:', err));
     }, 200);
   });
 }

@@ -329,8 +329,8 @@ async function main(): Promise<void> {
     const realControllerPromise = syncControllerHandler(realControllerRequest, realControllerResponse);
     realControllerRequest.finish([]);
     await realControllerPromise;
-    assert.equal(realControllerResponse.state.status, 503);
-    assert.deepEqual(realControllerResponse.state.payload, { error: "REDIS_NOT_CONFIGURED" });
+    assert.equal(realControllerResponse.state.status, 400);
+    assert.deepEqual(realControllerResponse.state.payload, { error: "MISSING_QSTASH_MESSAGE_ID" });
 
     const realMalformedControllerRequest = streamRequest({
       "Upstash-Signature": signQstashJwt(malformedBody, CURRENT_KEY),

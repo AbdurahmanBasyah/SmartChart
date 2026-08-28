@@ -2,6 +2,7 @@ import {
   authenticateQstashRequest,
   getPublicAppUrl,
   createQStashPublisher,
+  getHeader,
   parseRequestBody,
 } from "../../_lib/qstash.js";
 import {
@@ -15,7 +16,7 @@ export const config = { api: { bodyParser: false } };
 export default async function handler(req: any, res: any) {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Upstash-Signature");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Upstash-Signature, Upstash-Message-Id");
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "METHOD_NOT_ALLOWED" });
 
@@ -32,6 +33,11 @@ export default async function handler(req: any, res: any) {
     return res.status(400).json({ error: "INVALID_SYNC_PAYLOAD" });
   }
 
+  const messageId = getHeader(req, "Upstash-Message-Id");
+  if (body.runId == null && !messageId?.trim()) {
+    return res.status(400).json({ error: "MISSING_QSTASH_MESSAGE_ID" });
+  }
+
   try {
     const destination = `${getPublicAppUrl(req)}/api/jobs/stocks/sync-ticker`;
     const result = await runSyncController({
@@ -39,6 +45,7 @@ export default async function handler(req: any, res: any) {
       repository: getSnapshotRepository(),
       publisher: createQStashPublisher(),
       destination,
+      messageId,
     });
     return res.status(202).json({
       runId: result.runId,
@@ -50,6 +57,9 @@ export default async function handler(req: any, res: any) {
   } catch (error) {
     if (error instanceof SyncValidationError) {
       return res.status(400).json({ error: "INVALID_SYNC_PAYLOAD" });
+    }
+    if (error instanceof Error && error.message === "MISSING_QSTASH_MESSAGE_ID") {
+      return res.status(400).json({ error: "MISSING_QSTASH_MESSAGE_ID" });
     }
     if (error instanceof Error && error.message === "APP_URL_NOT_CONFIGURED") {
       return res.status(503).json({ error: "APP_URL_NOT_CONFIGURED" });

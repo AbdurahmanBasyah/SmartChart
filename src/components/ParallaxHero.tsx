@@ -16,7 +16,7 @@ import {
   Compass,
   Sparkles,
 } from 'lucide-react';
-import { StockData } from '../types';
+import { StockData, StockListItem } from '../types';
 import { IhsgMarketWidget } from './IhsgMarketWidget';
 
 // --- 3D Interactive SMC Candlestick Model Canvas Component ---
@@ -172,7 +172,7 @@ const Interactive3dSmcModel: React.FC = () => {
 interface ParallaxHeroProps {
   onStartChart: (stockTicker?: string) => void;
   onOpenScreener: () => void;
-  stocks: StockData[];
+  stocks: StockListItem[];
   onUpdateIhsgData?: (liveData: StockData) => void;
 }
 
@@ -216,6 +216,7 @@ export const ParallaxHero: React.FC<ParallaxHeroProps> = ({
         s.ticker === 'JKSE' ||
         s.name.toLowerCase().includes('ihsg')
     ) || stocks[0];
+  const ihsgStockData = ihsgStock && 'candles' in ihsgStock ? ihsgStock : undefined;
 
   return (
     <div
@@ -352,7 +353,7 @@ export const ParallaxHero: React.FC<ParallaxHeroProps> = ({
       {/* IHSG Market Overview & Quick SMC Analysis Section */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
         <IhsgMarketWidget
-          ihsgStock={ihsgStock}
+          ihsgStock={ihsgStockData}
           onOpenChart={(ticker) => onStartChart(ticker)}
           onUpdateIhsgData={onUpdateIhsgData}
         />

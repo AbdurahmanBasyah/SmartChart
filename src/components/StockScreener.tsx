@@ -18,11 +18,11 @@ import {
     Database,
     Cpu,
 } from "lucide-react";
-import { StockData, ScreenerFilter } from "../types";
+import { StockData, StockListItem, ScreenerFilter } from "../types";
 
 interface StockScreenerProps {
-    stocks: StockData[];
-    onSelectStock: (stock: StockData) => void;
+    stocks: StockListItem[];
+    onSelectStock: (stock: StockListItem) => void;
     onFetchNewStock?: (ticker: string) => Promise<void>;
     watchlist?: string[];
     onToggleWatchlist?: (ticker: string) => void;
@@ -31,7 +31,7 @@ interface StockScreenerProps {
 }
 
 // Helper to calculate SMC Signal Priority (1 = Highest Priority)
-export function getSmcSignalPriorityScore(stock: StockData): number {
+export function getSmcSignalPriorityScore(stock: StockListItem): number {
     const rec = stock?.recommendation;
     const status = rec?.status;
     const currentP = stock?.currentPrice ?? 0;
@@ -328,8 +328,6 @@ export const StockScreener: React.FC<StockScreenerProps> = ({
         // Smart Market Quality Filter: Eliminate severe downtrend / illiquid / AVOID stocks
         if (excludeDowntrend) {
             if ((stock.currentPrice ?? 0) <= 50) return false; // Exclude penny stocks <= Rp 50
-            if (rec?.action === "AVOID") return false; // Exclude stocks flagged AVOID
-            if (rec?.status === "NO_TRADE_ZONE") return false; // Exclude stocks in no-trade zone
         }
 
         // Search filter

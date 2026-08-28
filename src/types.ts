@@ -378,6 +378,63 @@ export interface StockData {
   snapshotSchemaVersion?: number;
 }
 
+export type StockUniverseItemSource = 'REDIS' | 'YAHOO' | 'SYNTHETIC' | 'UNKNOWN';
+
+export type StockUniverseRecommendation = Pick<
+  TradeRecommendation,
+  | 'structure'
+  | 'entryZone'
+  | 'stopLoss'
+  | 'stopLossPercent'
+  | 'takeProfit1'
+  | 'takeProfit1Percent'
+  | 'takeProfit2'
+  | 'takeProfit2Percent'
+  | 'riskRewardRatio'
+  | 'volumeConfirmation'
+  | 'volumeRatio'
+  | 'status'
+  | 'primaryZoneType'
+  | 'primaryZonePrice'
+  | 'isOnBuyArea'
+>;
+
+export interface StockUniverseItem {
+  symbol: string;
+  ticker: string;
+  name: string;
+  sector: string;
+  conglomerate?: string;
+  currentPrice: number;
+  change24h: number;
+  changePercent24h: number;
+  recommendation: StockUniverseRecommendation;
+  source: StockUniverseItemSource;
+  isRealData: boolean;
+  tradeDate?: string;
+  fetchedAt?: string;
+  freshness: NaraFreshnessTier;
+}
+
+export interface StockUniverseCoverage {
+  expected: number;
+  available: number;
+  missing: string[];
+  partial: boolean;
+  asOfDate?: string;
+  fetchedAt: string;
+}
+
+export interface StockUniverseEnvelope {
+  success: true;
+  source: 'REDIS' | 'YAHOO' | 'MIXED' | 'SYNTHETIC' | 'UNKNOWN';
+  data: StockUniverseItem[];
+  coverage: StockUniverseCoverage;
+  filteredCount?: number;
+}
+
+export type StockListItem = StockData | StockUniverseItem;
+
 export interface ScreenerFilter {
   search: string;
   sector: string;

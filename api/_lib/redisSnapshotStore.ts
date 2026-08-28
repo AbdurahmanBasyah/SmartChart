@@ -2,17 +2,26 @@ import { Redis } from "@upstash/redis";
 import {
   ANALYSIS_ENGINE_VERSION,
   DEFAULT_OHLCV_RETENTION_TRADING_DAYS,
-  stableSerializeSnapshot,
+  RAW_OHLCV_ROLLING_MAX_CANDLES,
+  createRawOhlcvSnapshot,
   validateRawOhlcvSnapshot,
+  validateStoredRawOhlcvSnapshot,
 } from "./rawOhlcvSnapshot.js";
-import type { RawOhlcvSnapshot } from "./rawOhlcvSnapshot.js";
+import type {
+  AnyRawOhlcvSnapshot,
+  RawOhlcvCandle,
+  RawOhlcvSnapshot,
+} from "./rawOhlcvSnapshot.js";
 
+// `stock:ohlcv:{date}:{ticker}` is the pre-v2 layout. It remains readable and
+// is intentionally never deleted by the v2 writer.
 export const RAW_SNAPSHOT_KEY_PREFIX = "stock:ohlcv:";
 export const LATEST_SNAPSHOT_KEY_PREFIX = "stock:latest:";
 export const SNAPSHOT_DATES_KEY = "stock:dates";
 export const SNAPSHOT_LOCK_KEY = "stock:lock";
 export const SYNC_STATUS_KEY_PREFIX = "stock:sync:";
 export const ANALYSIS_KEY_PREFIX = "analysis:";
+export const ROLLING_SNAPSHOT_MAX_CANDLES = RAW_OHLCV_ROLLING_MAX_CANDLES;
 
 const SYNC_STATUS_TTL_SECONDS = 7 * 24 * 60 * 60;
 const LOCK_TTL_SECONDS = 15 * 60;
@@ -50,6 +59,8 @@ export type SyncStatusRecord = {
   runId: string;
   tradeDate: string;
   status: SyncRunStatus;
+  /** Canonical expected population for this run. `total` is kept for compatibility. */
+  expected?: number;
   total: number;
   queued: number;
   completed: number;
@@ -90,8 +101,17 @@ function tickerKeyPart(ticker: string): string {
   return ticker.trim().toUpperCase();
 }
 
-export function rawSnapshotKey(tradeDate: string, ticker: string): string {
+export function rollingSnapshotKey(ticker: string): string {
+  return `${RAW_SNAPSHOT_KEY_PREFIX}${tickerKeyPart(ticker)}`;
+}
+
+export function legacyRawSnapshotKey(tradeDate: string, ticker: string): string {
   return `${RAW_SNAPSHOT_KEY_PREFIX}${tradeDate}:${tickerKeyPart(ticker)}`;
+}
+
+/** @deprecated Use legacyRawSnapshotKey for the v1 date-partitioned layout. */
+export function rawSnapshotKey(tradeDate: string, ticker: string): string {
+  return legacyRawSnapshotKey(tradeDate, ticker);
 }
 
 export function latestSnapshotKey(ticker: string): string {
@@ -140,6 +160,31 @@ function coerceHash(value: unknown): Record<string, string> {
   );
 }
 
+function candleSeriesSerialize(snapshot: AnyRawOhlcvSnapshot): string {
+  return JSON.stringify({
+    ticker: snapshot.ticker,
+    symbol: snapshot.symbol,
+    tradeDate: snapshot.tradeDate,
+    candles: snapshot.candles,
+  });
+}
+
+function mergeSnapshotCandles(
+  current: AnyRawOhlcvSnapshot | null,
+  incoming: RawOhlcvSnapshot,
+): RawOhlcvSnapshot {
+  const candles: RawOhlcvCandle[] = [
+    ...(current?.candles ?? []),
+    ...incoming.candles,
+  ];
+  const merged = createRawOhlcvSnapshot({
+    ticker: incoming.ticker,
+    candles,
+    fetchedAt: incoming.fetchedAt,
+  });
+  return merged;
+}
+
 export class SnapshotRepository {
   readonly retentionTradingDays: number;
   private readonly store: SnapshotStoreClient;
@@ -152,33 +197,45 @@ export class SnapshotRepository {
     ),
   ) {
     this.store = store;
-    this.retentionTradingDays = retentionTradingDays;
+    this.retentionTradingDays = Math.min(
+      Math.max(1, retentionTradingDays),
+      ROLLING_SNAPSHOT_MAX_CANDLES,
+    );
   }
 
-  async getSnapshotAtKey(key: string): Promise<RawOhlcvSnapshot | null> {
+  async getSnapshotAtKey(key: string): Promise<AnyRawOhlcvSnapshot | null> {
     const value = parseStoredValue<unknown>(await this.store.get(key));
-    const validation = validateRawOhlcvSnapshot(value);
+    const validation = validateStoredRawOhlcvSnapshot(value);
     return validation.valid ? validation.snapshot : null;
   }
 
-  async getSnapshot(ticker: string, tradeDate: string): Promise<RawOhlcvSnapshot | null> {
-    return this.getSnapshotAtKey(rawSnapshotKey(tradeDate, ticker));
+  async getSnapshot(ticker: string, tradeDate: string): Promise<AnyRawOhlcvSnapshot | null> {
+    const legacy = await this.getSnapshotAtKey(legacyRawSnapshotKey(tradeDate, ticker));
+    if (legacy) return legacy;
+    const rolling = await this.getLatestSnapshot(ticker);
+    return rolling?.tradeDate === tradeDate ? rolling : null;
   }
 
-  async getLatestSnapshot(ticker: string): Promise<RawOhlcvSnapshot | null> {
+  async getLatestSnapshot(ticker: string): Promise<AnyRawOhlcvSnapshot | null> {
+    const rolling = await this.getSnapshotAtKey(rollingSnapshotKey(ticker));
+    if (rolling) return rolling;
+
     const pointer = parseStoredValue<unknown>(
       await this.store.get(latestSnapshotKey(ticker)),
     );
     if (!pointer) return null;
     if (typeof pointer === "object") {
-      const validation = validateRawOhlcvSnapshot(pointer);
+      const validation = validateStoredRawOhlcvSnapshot(pointer);
       return validation.valid ? validation.snapshot : null;
     }
     if (typeof pointer !== "string") return null;
-    if (pointer.startsWith(RAW_SNAPSHOT_KEY_PREFIX)) {
+    if (
+      pointer.startsWith(RAW_SNAPSHOT_KEY_PREFIX) ||
+      pointer.startsWith(LATEST_SNAPSHOT_KEY_PREFIX)
+    ) {
       return this.getSnapshotAtKey(pointer);
     }
-    const validation = validateRawOhlcvSnapshot(parseStoredValue(pointer));
+    const validation = validateStoredRawOhlcvSnapshot(parseStoredValue(pointer));
     return validation.valid ? validation.snapshot : null;
   }
 
@@ -188,52 +245,45 @@ export class SnapshotRepository {
       const invalid = validation as Extract<typeof validation, { valid: false }>;
       throw new Error(invalid.reason);
     }
-    const normalized = validation.snapshot;
-    const snapshotKey = rawSnapshotKey(normalized.tradeDate, normalized.ticker);
-    const existing = await this.getSnapshotAtKey(snapshotKey);
-    const currentLatest = await this.getLatestSnapshot(normalized.ticker);
+    const incoming = validation.snapshot;
+    const currentLatest = await this.getLatestSnapshot(incoming.ticker);
+    if (currentLatest && incoming.tradeDate < currentLatest.tradeDate) {
+      // A stale provider response must not rewrite overlapping candles or
+      // move the latest pointer backwards. A later attempt can retry the
+      // current logical date without losing the durable rolling series.
+      return {
+        written: false,
+        pointerAdvanced: false,
+        tradeDate: currentLatest.tradeDate,
+      };
+    }
+    const normalized = mergeSnapshotCandles(currentLatest, incoming);
+    const existingRolling = await this.getSnapshotAtKey(
+      rollingSnapshotKey(normalized.ticker),
+    );
+    const shouldWritePayload =
+      !existingRolling ||
+      existingRolling.schemaVersion !== normalized.schemaVersion ||
+      candleSeriesSerialize(existingRolling) !== candleSeriesSerialize(normalized);
     const pointerAdvanced =
       !currentLatest || currentLatest.tradeDate <= normalized.tradeDate;
-    const shouldWritePayload =
-      !existing ||
-      stableSerializeSnapshot(existing) !== stableSerializeSnapshot(normalized);
 
     const transaction = this.store.multi();
-    if (shouldWritePayload) transaction.set(snapshotKey, normalized);
-    transaction.zadd(SNAPSHOT_DATES_KEY, {
-      score: Date.parse(`${normalized.tradeDate}T00:00:00.000Z`),
-      member: snapshotDateMember(normalized.tradeDate, normalized.ticker),
-    });
-    transaction.zadd(tickerDatesKey(normalized.ticker), {
-      score: Date.parse(`${normalized.tradeDate}T00:00:00.000Z`),
-      member: normalized.tradeDate,
-    });
-    if (pointerAdvanced) transaction.set(latestSnapshotKey(normalized.ticker), snapshotKey);
+    if (shouldWritePayload) {
+      transaction.set(rollingSnapshotKey(normalized.ticker), normalized);
+    }
+    // Keep a simple latest pointer for clients that already know this key. The
+    // v1 date keys and date indexes are never deleted or rewritten.
+    if (pointerAdvanced || !currentLatest) {
+      transaction.set(latestSnapshotKey(normalized.ticker), rollingSnapshotKey(normalized.ticker));
+    }
     await transaction.exec();
 
-    await this.cleanupTicker(normalized.ticker);
     return {
       written: shouldWritePayload,
       pointerAdvanced,
       tradeDate: normalized.tradeDate,
     };
-  }
-
-  private async cleanupTicker(ticker: string): Promise<void> {
-    const dates = await this.store.zrange<string>(tickerDatesKey(ticker), 0, -1);
-    const staleDates = dates.slice(
-      0,
-      Math.max(0, dates.length - this.retentionTradingDays),
-    );
-    if (staleDates.length === 0) return;
-
-    const transaction = this.store.multi();
-    for (const date of staleDates) {
-      transaction.del(rawSnapshotKey(date, ticker));
-      transaction.zrem(tickerDatesKey(ticker), date);
-      transaction.zrem(SNAPSHOT_DATES_KEY, snapshotDateMember(date, ticker));
-    }
-    await transaction.exec();
   }
 
   async getAnalysis<T = unknown>(
@@ -291,7 +341,7 @@ export class SnapshotRepository {
       counters["no-new-candle"] ?? base.noNewCandle ?? 0,
     );
     const processed = completed + failed + noNewCandle;
-    const total = Number(base.total ?? 0);
+    const total = Number(base.expected ?? base.total ?? 0);
     let status = base.status;
     if (total > 0 && processed >= total) {
       status = failed > 0
@@ -309,6 +359,7 @@ export class SnapshotRepository {
       : base.errorCodes ?? {};
     return {
       ...base,
+      expected: base.expected ?? base.total,
       status,
       completed,
       failed,
@@ -325,6 +376,8 @@ export class SnapshotRepository {
       syncStatusKey(status.runId),
       {
         ...status,
+        expected: status.expected ?? status.total,
+        startedAt: status.startedAt ?? now,
         lastUpdatedAt: status.lastUpdatedAt ?? now,
       },
       { ex: SYNC_STATUS_TTL_SECONDS },
@@ -340,9 +393,8 @@ export class SnapshotRepository {
     const resultKey = syncResultKey(args.runId, args.ticker);
     const previous = parseStoredValue<string>(await this.store.get(resultKey));
     if (previous === args.outcome) {
-      if (args.errorCode) {
-        await this.store.hincrby(syncErrorKey(args.runId), args.errorCode, 1);
-      }
+      // A QStash retry for the same delivery must not double-count either the
+      // population or its error denominator.
       return { accepted: false, status: await this.getSyncStatus(args.runId) };
     }
 

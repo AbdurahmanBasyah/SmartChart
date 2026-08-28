@@ -1,5 +1,6 @@
-import { Candle, StockData } from '../types';
-import { buildStockData, generateCandles, liquidIDXStocks, getLatestClosedTradingDateStr, formatJakartaDate } from '../data/mockStocks';
+import type { Candle, StockData } from '../types';
+import { buildStockData, liquidIDXStocks, getLatestClosedTradingDateStr, formatJakartaDate } from '../data/mockStocks';
+import { normalizeUniverseTicker } from '../../shared/stockUniverse';
 import { roundToIdxTick } from '../utils/idxTickRules';
 import { canonicalizeCandlePrices } from '../utils/candleNormalization';
 
@@ -17,14 +18,8 @@ export interface YahooStockMeta {
  * from Yahoo Finance API or local/Vercel server API.
  */
 export async function fetchYahooStockData(ticker: string): Promise<StockData | null> {
-  let cleanTicker = ticker.trim().toUpperCase().replace('.JK', '');
-  if (cleanTicker === 'IHSG' || cleanTicker === 'JKSE' || cleanTicker === '^JKSE') {
-    cleanTicker = '^JKSE';
-  } else if (cleanTicker === 'GMFFI') {
-    cleanTicker = 'GMFI';
-  } else if (cleanTicker === 'PADDI') {
-    cleanTicker = 'PADI';
-  }
+  const normalizedTicker = normalizeUniverseTicker(ticker);
+  const cleanTicker = normalizedTicker === 'IHSG' ? '^JKSE' : normalizedTicker;
 
   const yahooSymbol = cleanTicker.startsWith('^') ? cleanTicker : `${cleanTicker}.JK`;
   const isBrowser = typeof window !== 'undefined';
@@ -44,7 +39,7 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
           clearTimeout(timer);
           if (res.ok) {
             const data: StockData = await res.json();
-            if (data && data.candles && data.candles.length > 0) {
+            if (data?.isRealData === true && data.candles && data.candles.length > 0) {
               return data;
             }
           }
@@ -84,7 +79,7 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
     }
   }
 
-  const todayDateStr = formatJakartaDate(new Date());
+  const todayDateStr = getLatestClosedTradingDateStr();
 
   for (const item of candidates) {
     try {
@@ -175,7 +170,7 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
           const vol = meta.regularMarketVolume || 0;
 
           // Only include latest candle if it has valid trading volume or exists
-          if (vol > 0 || isIhsg) {
+          if (vol > 0) {
             if (!lastCandle || lastCandle.time < metaDateStr) {
               const openPrice = meta.regularMarketDayOpen || lastCandle?.close || latestPrice;
               const highPrice = meta.regularMarketDayHigh || Math.max(openPrice, latestPrice);
@@ -185,7 +180,7 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
               candles.push({
                 time: metaDateStr,
                 ...canonical,
-                volume: Math.round(vol > 0 ? vol : (lastCandle?.volume || 500000)),
+                volume: Math.round(vol),
               });
             } else if (lastCandle.time === metaDateStr) {
               const canonical = canonicalizeCandlePrices(
@@ -211,34 +206,30 @@ export async function fetchYahooStockData(ticker: string): Promise<StockData | n
         const conglomerateGroup = isIhsg ? 'Bursa Efek Indonesia' : matchedConfig?.cg;
 
         const finalTicker = isIhsg ? 'IHSG' : cleanTicker;
-        return buildStockData(yahooSymbol, finalTicker, companyName, sectorName, candles, conglomerateGroup, true);
+        const stockData = buildStockData(
+          yahooSymbol,
+          finalTicker,
+          companyName,
+          sectorName,
+          candles,
+          conglomerateGroup,
+          true,
+        );
+        stockData.source = 'YAHOO';
+        stockData.isRealData = true;
+        stockData.fetchedAt = new Date().toISOString();
+        stockData.tradeDate = candles[candles.length - 1]?.time;
+        return stockData;
       }
     } catch (err) {
       // Silent continue to next candidate
     }
   }
 
-  // Final fallback: If network calls to Yahoo/proxies fail, build a realistic dataset locally
-  const isIhsg = cleanTicker === '^JKSE';
-  const matchedConfig = liquidIDXStocks.find((s) => s.t === cleanTicker);
-  const companyName = isIhsg
-    ? 'Indeks Harga Saham Gabungan (IHSG)'
-    : (matchedConfig ? `${matchedConfig.n} Tbk.` : `${cleanTicker} Indonesia Tbk.`);
-  const sectorName = isIhsg ? 'Market Index' : (matchedConfig?.s || getSectorByTicker(cleanTicker));
-  const finalTicker = isIhsg ? 'IHSG' : cleanTicker;
-
-  const basePrice = isIhsg ? 7350 : (matchedConfig?.p || 2500);
-  const fallbackCandles = generateCandles(basePrice, 0.025, 0.001, 100);
-
-  return buildStockData(
-    yahooSymbol,
-    finalTicker,
-    companyName,
-    sectorName,
-    fallbackCandles,
-    matchedConfig?.cg,
-    false
-  );
+  // Production callers must surface provider unavailability to the UI/API.
+  // Development mock data is opt-in at the application boundary and is never
+  // silently returned by this real-provider function.
+  return null;
 }
 
 function getSectorByTicker(ticker: string): string {

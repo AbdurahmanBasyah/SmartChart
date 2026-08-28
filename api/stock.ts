@@ -1,121 +1,83 @@
-import { fetchYahooStockDataServer, getMockStocks, buildStockData, generateCandles } from './_lib/stockEngine.js';
-import { readLatestStockFromRedis } from './_lib/stockReadPath.js';
+import { normalizeTicker } from "./_lib/rawOhlcvSnapshot.js";
+import { fetchYahooStockDataServer } from "./_lib/stockEngine.js";
+import { readLatestStockFromRedis } from "./_lib/stockReadPath.js";
+
+function setHeaders(res: any): void {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+}
+
+function queryValue(value: unknown): string | undefined {
+  if (Array.isArray(value)) return value[0] == null ? undefined : String(value[0]);
+  return value == null ? undefined : String(value);
+}
+
+function requestTicker(req: any): string {
+  const pathParts = String(req?.url ?? "")
+    .split("?")[0]
+    .split("/")
+    .filter(Boolean);
+  const pathTicker = pathParts.length > 2 ? pathParts[pathParts.length - 1] : undefined;
+  const raw = queryValue(req?.query?.symbol) ??
+    queryValue(req?.query?.ticker) ??
+    queryValue(req?.query?.s) ??
+    pathTicker ??
+    "IHSG";
+  try {
+    return normalizeTicker(decodeURIComponent(raw));
+  } catch {
+    throw new Error("INVALID_TICKER");
+  }
+}
+
+function successCache(res: any): void {
+  res.removeHeader("Pragma");
+  res.removeHeader("Expires");
+  res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
+  res.setHeader("Vercel-CDN-Cache-Control", "public, s-maxage=300, stale-while-revalidate=3600");
+}
 
 export default async function handler(req: any, res: any) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
+  setHeaders(res);
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "GET") return res.status(405).json({ error: "METHOD_NOT_ALLOWED" });
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
+  let ticker = "IHSG";
   try {
-    // Support query param ?symbol=... or URL path param
-    const pathParts = String(req?.url || "")
-      .split("?")[0]
-      .split("/")
-      .filter(Boolean)
-    const pathTicker = pathParts.length > 2 ? pathParts[pathParts.length - 1] : undefined;
-    const symbolQuery = req?.query?.symbol || req?.query?.ticker || req?.query?.s || pathTicker || 'IHSG';
-    const rawSymbol = Array.isArray(symbolQuery) ? symbolQuery[0] : String(symbolQuery);
-
-    let cleanSymbol = rawSymbol;
+    ticker = requestTicker(req);
     try {
-      cleanSymbol = decodeURIComponent(rawSymbol);
-    } catch (e) {
-      // ignore
-    }
-
-    let cleanTicker = cleanSymbol.trim().toUpperCase().replace('.JK', '');
-    if (cleanTicker === 'IHSG' || cleanTicker === 'JKSE' || cleanTicker === '^JKSE') {
-      cleanTicker = '^JKSE';
-    }
-
-    const yahooSymbol = cleanTicker.startsWith('^') ? cleanTicker : `${cleanTicker}.JK`;
-
-    // Durable raw OHLCV is the preferred source. Analysis is built lazily and
-    // cached by engine version; Redis credentials never leave this server path.
-    try {
-      const snapshotStock = await readLatestStockFromRedis(cleanTicker);
-      if (snapshotStock && snapshotStock.candles.length > 0) {
-        if (req.method === 'GET') {
-          res.removeHeader('Pragma');
-          res.removeHeader('Expires');
-          res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
-          res.setHeader('Vercel-CDN-Cache-Control', 'public, s-maxage=300, stale-while-revalidate=3600');
-        }
+      const snapshotStock = await readLatestStockFromRedis(ticker);
+      if (snapshotStock?.isRealData === true && snapshotStock.candles.length > 0) {
+        successCache(res);
         return res.status(200).json(snapshotStock);
       }
     } catch {
-      // Redis is optional during local development; retain the existing path.
+      // Redis is an optimization; the direct real provider path remains available.
     }
 
-    // 1. Try fetching real market data from Yahoo Finance API via serverless function
-    try {
-      const realData = await fetchYahooStockDataServer(cleanTicker);
-      if (realData && realData.candles && realData.candles.length > 0) {
-        if (req.method === 'GET') {
-          res.removeHeader('Pragma');
-          res.removeHeader('Expires');
-          res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
-          res.setHeader('Vercel-CDN-Cache-Control', 'public, s-maxage=300, stale-while-revalidate=3600');
-        }
-        return res.status(200).json(realData);
-      }
-    } catch (err) {
-      console.warn(`Vercel serverless Yahoo fetch failed for ${yahooSymbol}:`, err);
+    const realData = await fetchYahooStockDataServer(ticker);
+    if (realData?.isRealData === true && realData.candles.length > 0) {
+      successCache(res);
+      return res.status(200).json(realData);
     }
-
-    // 2. Check local dataset
-    const mockList = getMockStocks();
-    const matched = mockList.find(
-      (s) =>
-        s.ticker.toUpperCase() === cleanTicker ||
-        (cleanTicker === '^JKSE' && (s.ticker === 'IHSG' || s.ticker === '^JKSE'))
-    );
-
-    if (matched) {
-      if (req.method === 'GET') {
-        res.removeHeader('Pragma');
-        res.removeHeader('Expires');
-        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
-        res.setHeader('Vercel-CDN-Cache-Control', 'public, s-maxage=300, stale-while-revalidate=3600');
-      }
-      return res.status(200).json(matched);
+    return res.status(503).json({
+      success: false,
+      error: "REAL_STOCK_DATA_UNAVAILABLE",
+      ticker,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "INVALID_TICKER") {
+      return res.status(400).json({ success: false, error: "INVALID_TICKER", ticker });
     }
-
-    // 3. Fallback generator for unlisted IDX stock tickers
-    const fallbackCandles = generateCandles(1500, 0.03, 0.001, 90);
-    const fallbackStock = buildStockData(
-      yahooSymbol,
-      cleanTicker,
-      `${cleanTicker} Indonesia Tbk.`,
-      'IDX Market',
-      fallbackCandles
-    );
-
-    if (req.method === 'GET') {
-      res.removeHeader('Pragma');
-      res.removeHeader('Expires');
-      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
-      res.setHeader('Vercel-CDN-Cache-Control', 'public, s-maxage=300, stale-while-revalidate=3600');
-    }
-    return res.status(200).json(fallbackStock);
-  } catch (globalErr) {
-    console.error('Unhandled error in /api/stock:', globalErr);
-    // Absolute fallback: Return 200 with generated stock so Vercel NEVER returns 500
-    const fallbackCandles = generateCandles(142, 0.02, 0.001, 90);
-    const fallbackStock = buildStockData(
-      'BUMI.JK',
-      'BUMI',
-      'Bumi Resources Tbk.',
-      'Energy & Mining',
-      fallbackCandles
-    );
-    return res.status(200).json(fallbackStock);
+    console.error("Unhandled error in /api/stock:", error instanceof Error ? error.message : "unknown");
+    return res.status(503).json({
+      success: false,
+      error: "REAL_STOCK_DATA_UNAVAILABLE",
+      ticker,
+    });
   }
 }

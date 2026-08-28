@@ -15,15 +15,15 @@ import {
   Home,
   ChevronRight,
 } from 'lucide-react';
-import { StockData } from '../types';
+import { StockData, StockListItem } from '../types';
 import { SmartMoneyIcon } from './SmartMoneyIcon';
 
 interface NavbarProps {
   activeTab: 'landing' | 'chart' | 'inventory' | 'screener' | 'guide' | 'watchlist';
   setActiveTab: (tab: 'landing' | 'chart' | 'inventory' | 'screener' | 'guide' | 'watchlist') => void;
-  stocks: StockData[];
+  stocks: StockListItem[];
   selectedStock: StockData | null;
-  onSelectStock: (stock: StockData) => void;
+  onSelectStock: (stock: StockListItem) => void;
   onFetchNewStock?: (ticker: string) => Promise<void>;
   watchlistCount?: number;
 }

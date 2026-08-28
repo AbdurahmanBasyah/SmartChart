@@ -1,6 +1,8 @@
-export const RAW_SNAPSHOT_SCHEMA_VERSION = 1 as const;
-export const DEFAULT_OHLCV_RETENTION_TRADING_DAYS = 90;
-export const ANALYSIS_ENGINE_VERSION = "sc20260826-14.v1";
+export const RAW_SNAPSHOT_SCHEMA_VERSION = 2 as const;
+export const LEGACY_RAW_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+export const RAW_OHLCV_ROLLING_MAX_CANDLES = 260;
+export const DEFAULT_OHLCV_RETENTION_TRADING_DAYS = RAW_OHLCV_ROLLING_MAX_CANDLES;
+export const ANALYSIS_ENGINE_VERSION = "sc20260828-16.v2";
 export const QSTASH_STOCK_SYNC_CRON = "CRON_TZ=Asia/Jakarta 45 16 * * 1-5";
 
 export type RawOhlcvCandle = {
@@ -23,8 +25,25 @@ export type RawOhlcvSnapshot = {
   candles: RawOhlcvCandle[];
 };
 
+export type LegacyRawOhlcvSnapshot = {
+  schemaVersion: typeof LEGACY_RAW_SNAPSHOT_SCHEMA_VERSION;
+  ticker: string;
+  symbol: string;
+  tradeDate: string;
+  fetchedAt: string;
+  source: "YAHOO";
+  isRealData: true;
+  candles: RawOhlcvCandle[];
+};
+
+export type AnyRawOhlcvSnapshot = RawOhlcvSnapshot | LegacyRawOhlcvSnapshot;
+
 export type RawOhlcvValidation =
   | { valid: true; snapshot: RawOhlcvSnapshot }
+  | { valid: false; code: RawOhlcvErrorCode; reason: string };
+
+export type StoredRawOhlcvValidation =
+  | { valid: true; snapshot: AnyRawOhlcvSnapshot }
   | { valid: false; code: RawOhlcvErrorCode; reason: string };
 
 export type RawOhlcvErrorCode =
@@ -48,7 +67,8 @@ export class RawOhlcvError extends Error {
   }
 }
 
-export function isValidIsoDate(value: string): boolean {
+export function isValidIsoDate(value: unknown): value is string {
+  if (typeof value !== "string") return false;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const [year, month, day] = value.split("-").map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));
@@ -72,31 +92,64 @@ export function formatJakartaDate(dateOrTimestamp: Date | number): string {
   }).formatToParts(date);
   const values = new Map(
     parts
-      .filter((part) => part.type === "year" || part.type === "month" || part.type === "day")
+      .filter(
+        (part) =>
+          part.type === "year" || part.type === "month" || part.type === "day",
+      )
       .map((part) => [part.type, part.value]),
   );
   return `${values.get("year")}-${values.get("month")}-${values.get("day")}`;
 }
 
+function jakartaDateParts(now: Date): Map<string, string> {
+  return new Map(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Jakarta",
+      weekday: "short",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric",
+      hour12: false,
+      hourCycle: "h23",
+    })
+      .formatToParts(now)
+      .map((part) => [part.type, part.value]),
+  );
+}
+
+function previousWeekday(date: Date): Date {
+  const result = new Date(date.getTime());
+  do {
+    result.setUTCDate(result.getUTCDate() - 1);
+  } while (result.getUTCDay() === 0 || result.getUTCDay() === 6);
+  return result;
+}
+
 export function getLatestLogicalTradeDate(now: Date = new Date()): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Jakarta",
-    weekday: "short",
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-  }).formatToParts(now);
-  const values = new Map(parts.map((part) => [part.type, part.value]));
-  const weekday = values.get("weekday");
-  const daysToSubtract = weekday === "Sun" ? 2 : weekday === "Sat" ? 1 : 0;
+  const parts = jakartaDateParts(now);
+  const weekday = parts.get("weekday");
   const target = new Date(
     Date.UTC(
-      Number(values.get("year")),
-      Number(values.get("month")) - 1,
-      Number(values.get("day")),
+      Number(parts.get("year")),
+      Number(parts.get("month")) - 1,
+      Number(parts.get("day")),
     ),
   );
-  target.setUTCDate(target.getUTCDate() - daysToSubtract);
+
+  if (weekday === "Sat" || weekday === "Sun") {
+    while (target.getUTCDay() === 0 || target.getUTCDay() === 6) {
+      target.setUTCDate(target.getUTCDate() - 1);
+    }
+    return target.toISOString().slice(0, 10);
+  }
+
+  const hour = Number(parts.get("hour") ?? 0);
+  const minute = Number(parts.get("minute") ?? 0);
+  if (hour < 16 || (hour === 16 && minute < 45)) {
+    return previousWeekday(target).toISOString().slice(0, 10);
+  }
   return target.toISOString().slice(0, 10);
 }
 
@@ -124,6 +177,19 @@ export function tickerToSnapshotSymbol(ticker: string): string {
     : `${normalizeTicker(ticker)}.JK`;
 }
 
+function isRawCandle(value: unknown): value is RawOhlcvCandle {
+  if (!value || typeof value !== "object") return false;
+  const candle = value as Partial<RawOhlcvCandle>;
+  return (
+    typeof candle.time === "string" &&
+    typeof candle.open === "number" &&
+    typeof candle.high === "number" &&
+    typeof candle.low === "number" &&
+    typeof candle.close === "number" &&
+    typeof candle.volume === "number"
+  );
+}
+
 function validateCandle(candle: RawOhlcvCandle): boolean {
   return (
     isValidIsoDate(candle.time) &&
@@ -142,24 +208,29 @@ function validateCandle(candle: RawOhlcvCandle): boolean {
   );
 }
 
-function sortAndDedupeCandles(candles: RawOhlcvCandle[]): RawOhlcvCandle[] {
+export function sortAndDedupeCandles(
+  candles: RawOhlcvCandle[],
+  maxCandles = RAW_OHLCV_ROLLING_MAX_CANDLES,
+): RawOhlcvCandle[] {
   const byDate = new Map<string, RawOhlcvCandle>();
   for (const candle of candles) {
-    if (!byDate.has(candle.time)) byDate.set(candle.time, { ...candle });
+    if (isRawCandle(candle)) byDate.set(candle.time, { ...candle });
   }
-  return Array.from(byDate.values()).sort((left, right) =>
+  const sorted = Array.from(byDate.values()).sort((left, right) =>
     left.time.localeCompare(right.time),
   );
+  return maxCandles > 0 ? sorted.slice(-maxCandles) : sorted;
 }
 
-export function validateRawOhlcvSnapshot(
+function validateSnapshotEnvelope(
   candidate: unknown,
-): RawOhlcvValidation {
+  expectedVersion: 1 | 2,
+): { valid: true; snapshot: AnyRawOhlcvSnapshot } | { valid: false; code: RawOhlcvErrorCode; reason: string } {
   if (!candidate || typeof candidate !== "object") {
     return { valid: false, code: "EMPTY_RESPONSE", reason: "Snapshot is empty" };
   }
 
-  const value = candidate as Partial<RawOhlcvSnapshot>;
+  const value = candidate as Partial<AnyRawOhlcvSnapshot>;
   let ticker: string;
   try {
     ticker = normalizeTicker(value.ticker);
@@ -171,50 +242,91 @@ export function validateRawOhlcvSnapshot(
     };
   }
 
-  const candles = Array.isArray(value.candles)
-    ? sortAndDedupeCandles(value.candles as RawOhlcvCandle[])
-    : [];
+  const inputCandles = Array.isArray(value.candles) ? value.candles : [];
+  const candles = sortAndDedupeCandles(inputCandles as RawOhlcvCandle[]);
   if (
-    value.schemaVersion !== RAW_SNAPSHOT_SCHEMA_VERSION ||
+    value.schemaVersion !== expectedVersion ||
     value.source !== "YAHOO" ||
     value.isRealData !== true ||
     value.symbol !== tickerToSnapshotSymbol(ticker) ||
     !isValidIsoDate(String(value.tradeDate ?? "")) ||
-    !value.fetchedAt ||
-    Number.isNaN(Date.parse(String(value.fetchedAt))) ||
-    candles.length === 0
+    typeof value.fetchedAt !== "string" ||
+    Number.isNaN(Date.parse(value.fetchedAt)) ||
+    inputCandles.length === 0 ||
+    candles.length === 0 ||
+    (expectedVersion === RAW_SNAPSHOT_SCHEMA_VERSION &&
+      inputCandles.length > RAW_OHLCV_ROLLING_MAX_CANDLES)
   ) {
     return { valid: false, code: "INVALID_OHLC", reason: "Snapshot envelope is invalid" };
   }
 
-  for (let index = 0; index < candles.length; index += 1) {
-    const candle = candles[index];
-    if (!validateCandle(candle)) {
+  for (const candle of inputCandles) {
+    if (!isRawCandle(candle) || !validateCandle(candle)) {
       return { valid: false, code: "INVALID_OHLC", reason: "Candle OHLCV is invalid" };
     }
-    if (index > 0 && candles[index - 1].time >= candle.time) {
-      return { valid: false, code: "INVALID_OHLC", reason: "Candle dates are not strictly increasing" };
+  }
+
+  for (let index = 1; index < candles.length; index += 1) {
+    if (candles[index - 1].time >= candles[index].time) {
+      return {
+        valid: false,
+        code: "INVALID_OHLC",
+        reason: "Candle dates are not strictly increasing",
+      };
     }
   }
 
   const tradeDate = String(value.tradeDate);
   if (candles[candles.length - 1].time !== tradeDate) {
-    return { valid: false, code: "INVALID_OHLC", reason: "Trade date is not the last candle date" };
+    return {
+      valid: false,
+      code: "INVALID_OHLC",
+      reason: "Trade date is not the last candle date",
+    };
   }
 
-  return {
-    valid: true,
-    snapshot: {
-      schemaVersion: RAW_SNAPSHOT_SCHEMA_VERSION,
-      ticker,
-      symbol: tickerToSnapshotSymbol(ticker),
-      tradeDate,
-      fetchedAt: new Date(String(value.fetchedAt)).toISOString(),
-      source: "YAHOO",
-      isRealData: true,
-      candles,
-    },
+  const normalizedBase = {
+    ticker,
+    symbol: tickerToSnapshotSymbol(ticker),
+    tradeDate,
+    fetchedAt: new Date(value.fetchedAt as string).toISOString(),
+    source: "YAHOO" as const,
+    isRealData: true as const,
+    candles,
   };
+  return expectedVersion === RAW_SNAPSHOT_SCHEMA_VERSION
+    ? { valid: true, snapshot: { schemaVersion: 2, ...normalizedBase } }
+    : { valid: true, snapshot: { schemaVersion: 1, ...normalizedBase } };
+}
+
+export function validateRawOhlcvSnapshot(
+  candidate: unknown,
+): RawOhlcvValidation {
+  const validation = validateSnapshotEnvelope(candidate, RAW_SNAPSHOT_SCHEMA_VERSION);
+  if (validation.valid === false) {
+    return validation as Extract<RawOhlcvValidation, { valid: false }>;
+  }
+  return { valid: true, snapshot: validation.snapshot as RawOhlcvSnapshot };
+}
+
+export function validateStoredRawOhlcvSnapshot(
+  candidate: unknown,
+): StoredRawOhlcvValidation {
+  if (
+    candidate &&
+    typeof candidate === "object" &&
+    (candidate as { schemaVersion?: unknown }).schemaVersion ===
+      LEGACY_RAW_SNAPSHOT_SCHEMA_VERSION
+  ) {
+    const validation = validateSnapshotEnvelope(
+      candidate,
+      LEGACY_RAW_SNAPSHOT_SCHEMA_VERSION,
+    );
+    return validation.valid
+      ? { valid: true, snapshot: validation.snapshot as LegacyRawOhlcvSnapshot }
+      : validation;
+  }
+  return validateRawOhlcvSnapshot(candidate);
 }
 
 export function createRawOhlcvSnapshot(args: {
@@ -241,7 +353,7 @@ export function createRawOhlcvSnapshot(args: {
   return validation.snapshot;
 }
 
-export function stableSerializeSnapshot(snapshot: RawOhlcvSnapshot): string {
+export function stableSerializeSnapshot(snapshot: AnyRawOhlcvSnapshot): string {
   return JSON.stringify({
     schemaVersion: snapshot.schemaVersion,
     ticker: snapshot.ticker,
@@ -296,14 +408,17 @@ export async function fetchYahooRawOhlcv(
     }
     throw new RawOhlcvError(
       "PROVIDER_UNAVAILABLE",
-      error instanceof Error ? "Yahoo provider request failed" : "Yahoo provider unavailable",
+      error instanceof Error
+        ? "Yahoo provider request failed"
+        : "Yahoo provider unavailable",
       true,
     );
   }
   clearTimeout(timeout);
 
   if (!response.ok) {
-    const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+    const retryable =
+      response.status === 408 || response.status === 429 || response.status >= 500;
     throw new RawOhlcvError(
       "PROVIDER_HTTP",
       `Yahoo provider returned HTTP ${response.status}`,
@@ -325,7 +440,7 @@ export async function fetchYahooRawOhlcv(
     throw new RawOhlcvError("EMPTY_RESPONSE", "Yahoo provider returned no OHLCV candles");
   }
 
-  const latestAllowedDate = formatJakartaDate(options.now ?? new Date());
+  const latestAllowedDate = getLatestLogicalTradeDate(options.now ?? new Date());
   const candles: RawOhlcvCandle[] = [];
   const seenDates = new Set<string>();
   for (let index = 0; index < timestamps.length; index += 1) {
@@ -336,9 +451,7 @@ export async function fetchYahooRawOhlcv(
     const close = quote.close?.[index];
     const volume = quote.volume?.[index] ?? 0;
     if ([open, high, low, close].every((item) => item == null)) continue;
-    if ([open, high, low, close, volume].some((item) => item == null)) {
-      continue;
-    }
+    if ([open, high, low, close, volume].some((item) => item == null)) continue;
     const time = formatJakartaDate(timestamp);
     if (!isValidIsoDate(time) || time > latestAllowedDate || seenDates.has(time)) continue;
     const candle = {
@@ -356,9 +469,9 @@ export async function fetchYahooRawOhlcv(
     candles.push(candle);
   }
 
-  candles.sort((left, right) => left.time.localeCompare(right.time));
-  if (candles.length < 5) {
+  const normalizedCandles = sortAndDedupeCandles(candles);
+  if (normalizedCandles.length < 5) {
     throw new RawOhlcvError("NO_NEW_CANDLE", "Yahoo provider has no usable closed candle", false);
   }
-  return createRawOhlcvSnapshot({ ticker, candles });
+  return createRawOhlcvSnapshot({ ticker, candles: normalizedCandles });
 }

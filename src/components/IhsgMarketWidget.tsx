@@ -43,11 +43,13 @@ export const IhsgMarketWidget: React.FC<IhsgMarketWidgetProps> = ({
         try {
           const res = await fetch('/api/stock/%5EJKSE');
           if (res.ok) {
-            fresh = await res.json();
+            const candidate: StockData = await res.json();
+            if (candidate?.isRealData === true) fresh = candidate;
           } else {
             const res2 = await fetch('/api/stock?symbol=^JKSE');
             if (res2.ok) {
-              fresh = await res2.json();
+              const candidate: StockData = await res2.json();
+              if (candidate?.isRealData === true) fresh = candidate;
             }
           }
         } catch (e) {
@@ -59,7 +61,7 @@ export const IhsgMarketWidget: React.FC<IhsgMarketWidgetProps> = ({
           fresh = await fetchYahooStockData('^JKSE');
         }
 
-        if (isMounted && fresh && fresh.candles && fresh.candles.length > 0) {
+        if (isMounted && fresh?.isRealData === true && fresh.candles && fresh.candles.length > 0) {
           setActiveStock(fresh);
           if (onUpdateIhsgData) {
             onUpdateIhsgData(fresh);

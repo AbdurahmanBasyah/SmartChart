@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   getLatestLogicalTradeDate,
   isValidIsoDate,
@@ -16,24 +17,12 @@ import {
   STOCK_SYNC_QSTASH_RETRIES,
 } from "./qstash.js";
 import type { QStashBatchMessage, QStashPublisher } from "./qstash.js";
+import { CANONICAL_STOCK_TICKERS } from "../../shared/stockUniverse.js";
 
 export const STOCK_SYNC_LOCK_TTL_SECONDS = 15 * 60;
 
-// This is the same liquid IDX universe used by the existing server engine,
-// kept as a dependency-free list so the scheduled path never imports analysis.
-export const STOCK_SYNC_TICKERS = [
-  "IHSG", "BREN", "TPIA", "BRPT", "CUAN", "PTRO", "CDIA", "BUMI", "BRMS", "ENRG",
-  "DEWA", "VKTR", "UNSP", "VIVA", "MDIA", "PSAB", "RAJA", "MINA", "BUVA", "RATU",
-  "CBRE", "PSKT", "PADI", "FORU", "JARR", "TEBE", "SINI", "ARCI", "EMAS", "GZCO",
-  "INET", "WIFI", "MORA", "BULL", "SOCI", "PANI", "BYAN", "ADRO", "ADMR", "AADI",
-  "ESSA", "MDKA", "MBMA", "INDF", "ICBP", "AMRT", "DNET", "LSIP", "SIMP", "META",
-  "AMMN", "BBCA", "TOWR", "BELI", "BBHI", "GIAA", "INKP", "TKIM", "BSDE", "BSIM",
-  "SMAR", "LPKR", "LPCK", "MPPA", "LPPF", "SILO", "MLPL", "NOBU", "TAPG", "DRMA",
-  "ASSA", "SRTG", "PALM", "PNBN", "PNLF", "BBRI", "BMRI", "BBNI", "BRIS", "ARTO",
-  "BBTN", "BFIN", "PGAS", "PTBA", "ITMG", "MEDC", "HRUM", "ANTM", "INCO", "UNVR",
-  "CPIN", "MYOR", "ASII", "ACES", "MAPI", "TLKM", "ISAT", "EXCL", "GOTO", "UNTR",
-  "SMGR", "KLBF", "CTRA",
-] as const;
+// The scheduled path imports only this dependency-free metadata-derived list.
+export const STOCK_SYNC_TICKERS = CANONICAL_STOCK_TICKERS;
 
 const STOCK_SYNC_TICKER_SET = new Set<string>(STOCK_SYNC_TICKERS);
 
@@ -46,6 +35,16 @@ export type SyncTickerMessage = {
 export class SyncValidationError extends Error {
   readonly code = "INVALID_SYNC_PAYLOAD" as const;
   readonly retryable = false;
+}
+
+export class MissingQstashMessageIdError extends Error {
+  readonly code = "MISSING_QSTASH_MESSAGE_ID" as const;
+  readonly retryable = false;
+
+  constructor() {
+    super("MISSING_QSTASH_MESSAGE_ID");
+    this.name = "MissingQstashMessageIdError";
+  }
 }
 
 export class SyncProcessingError extends Error {
@@ -67,6 +66,7 @@ export type SyncControllerInput = {
   destination: string;
   now?: Date;
   tickers?: readonly string[];
+  messageId?: string;
 };
 
 export type SyncControllerResult = {
@@ -120,12 +120,31 @@ export function parseSyncMessage(value: unknown): SyncTickerMessage {
   }
 }
 
-function makeControllerRunId(body: SyncControllerInput["body"], tradeDate: string): string {
+function normalizeQstashMessageId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+export function makeMessageDerivedRunId(messageId: string): string {
+  const normalized = normalizeQstashMessageId(messageId);
+  if (!normalized) throw new MissingQstashMessageIdError();
+  const digest = createHash("sha256").update(normalized, "utf8").digest("hex");
+  return `stock-sync-${digest.slice(0, 32)}`;
+}
+
+function makeControllerRunId(
+  body: SyncControllerInput["body"],
+  messageId?: string,
+): string {
   if (body?.runId !== undefined) {
     if (!validRunId(body.runId)) throw new SyncValidationError("Sync run id is invalid");
     return body.runId;
   }
-  return `stock-sync-${tradeDate}`;
+  // Date-only identifiers caused a manual invocation to suppress the official
+  // QStash schedule. Every signed delivery without an explicit validated runId
+  // must therefore derive its identity from the QStash message id.
+  return makeMessageDerivedRunId(messageId ?? "");
 }
 
 function normalizeUniverse(tickers: readonly string[]): string[] {
@@ -169,15 +188,19 @@ export async function runSyncController(
   ) {
     throw new SyncValidationError("Sync controller payload must be an object");
   }
-  const tradeDate = input.body?.tradeDate
-    ? input.body.tradeDate
-    : getLatestLogicalTradeDate(input.now ?? new Date());
-  if (!isValidIsoDate(tradeDate)) {
+  const requestedTradeDate = input.body?.tradeDate;
+  const tradeDate = requestedTradeDate === undefined
+    ? getLatestLogicalTradeDate(input.now ?? new Date())
+    : requestedTradeDate;
+  if (typeof tradeDate !== "string" || !isValidIsoDate(tradeDate)) {
     throw new SyncValidationError("Logical trade date is invalid");
   }
-  const runId = makeControllerRunId(input.body, tradeDate);
+  const runId = makeControllerRunId(input.body, input.messageId);
   const tickers = normalizeUniverse(
-    input.body?.tickers?.length ? input.body.tickers : input.tickers ?? STOCK_SYNC_TICKERS,
+    // The production controller has one canonical population. `input.tickers`
+    // is retained only as a test/internal injection point and is never supplied
+    // by the HTTP handler; request-body ticker lists cannot shrink the fanout.
+    input.tickers ?? STOCK_SYNC_TICKERS,
   );
   if (tickers.length === 0) throw new SyncValidationError("Ticker universe is empty");
 
@@ -194,6 +217,19 @@ export async function runSyncController(
       runId,
       tradeDate,
       status: "already-completed",
+      total: existing.total,
+      queued: existing.queued,
+      statusRecord: existing,
+    };
+  }
+  if (existing && ["queued", "running"].includes(existing.status)) {
+    // A redelivered controller message must not publish a second fan-out even
+    // if the short-lived lock has already expired. A new QStash message ID
+    // gets a distinct run ID and can proceed independently once unlocked.
+    return {
+      runId,
+      tradeDate,
+      status: "already-running",
       total: existing.total,
       queued: existing.queued,
       statusRecord: existing,
@@ -219,6 +255,7 @@ export async function runSyncController(
     runId,
     tradeDate,
     status: "queued",
+    expected: tickers.length,
     total: tickers.length,
     queued: 0,
     completed: 0,
@@ -235,6 +272,7 @@ export async function runSyncController(
         runId,
         tradeDate,
         status: "queued",
+        expected: tickers.length,
         total: tickers.length,
         queued,
         completed: 0,
@@ -263,6 +301,7 @@ export async function runSyncController(
       runId,
       tradeDate,
       status: "queued",
+      expected: tickers.length,
       total: tickers.length,
       queued,
       completed: 0,
@@ -282,6 +321,7 @@ export async function runSyncController(
       runId,
       tradeDate,
       status: "failed",
+      expected: tickers.length,
       total: tickers.length,
       queued: 0,
       completed: 0,

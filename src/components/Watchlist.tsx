@@ -16,13 +16,13 @@ import {
   Crown,
   Loader2,
 } from 'lucide-react';
-import { StockData } from '../types';
+import { StockData, StockListItem } from '../types';
 import { getSmcSignalPriorityScore } from './StockScreener';
 
 interface WatchlistProps {
   watchlist: string[];
-  stocks: StockData[];
-  onSelectStock: (stock: StockData) => void;
+  stocks: StockListItem[];
+  onSelectStock: (stock: StockListItem) => void;
   onRemoveFromWatchlist: (ticker: string) => void;
   onAddStockByTicker: (ticker: string) => Promise<void>;
   onOpenScreener: () => void;
@@ -55,7 +55,7 @@ export const Watchlist: React.FC<WatchlistProps> = ({
   // Find tickers in watchlist that are already loaded in `stocks`
   const watchlistStocks = watchlist
     .map((ticker) => stocks.find((s) => isMatchingTicker(s.ticker, ticker)))
-    .filter(Boolean) as StockData[];
+    .filter(Boolean) as StockListItem[];
 
   // Find tickers that were saved to watchlist but are not yet in `stocks` (e.g. non-liquid or custom added stocks)
   const missingTickers = watchlist.filter(

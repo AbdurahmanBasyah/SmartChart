@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import {
     StockData,
+    StockListItem,
     BrokerInventoryItem,
     BrokerInventorySummary,
     BrokerDailyPoint,
@@ -41,9 +42,9 @@ import { DualCalendarPicker } from "./DualCalendarPicker";
 import { NaraSummaryPanel } from "./NaraSummaryPanel";
 
 interface InventoryChartProps {
-    stocks: StockData[];
+    stocks: StockListItem[];
     selectedStock: StockData | null;
-    onSelectStock: (stock: StockData) => void;
+    onSelectStock: (stock: StockListItem) => void;
     onFetchNewStock?: (ticker: string) => Promise<void> | void;
     onNavigateToChart: (ticker: string) => void;
 }
@@ -592,7 +593,7 @@ export const InventoryChart: React.FC<InventoryChartProps> = ({
     onNavigateToChart,
 }) => {
     // Current active stock
-    const currentStock = selectedStock || stocks[0];
+    const currentStock = selectedStock;
     const ticker = currentStock?.ticker || "BBCA";
 
     // Time range state (Default 3 Months back)

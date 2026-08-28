@@ -15,7 +15,7 @@ export const config = { api: { bodyParser: false } };
 export default async function handler(req: any, res: any) {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Upstash-Signature");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Upstash-Signature, Upstash-Message-Id");
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "METHOD_NOT_ALLOWED" });
 

@@ -296,6 +296,7 @@ async function main(): Promise<void> {
     destination: "https://example.invalid/api/jobs/stocks/sync-ticker",
     now: new Date("2026-08-26T10:00:00.000Z"),
     tickers: ["BBCA", "BBRI"],
+    messageId: "fixture-controller-message",
   });
   assert.equal(controllerResult.status, "queued");
   assert.equal(controllerResult.queued, 2);

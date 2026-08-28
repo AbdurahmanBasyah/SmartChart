@@ -11,8 +11,8 @@ import { InventoryChart } from './components/InventoryChart';
 import { SmcGuideModal } from './components/SmcGuideModal';
 import { SmcLoadingModal } from './components/SmcLoadingModal';
 import { SyncLoadingScreen } from './components/SyncLoadingScreen';
-import { getMockStocks } from './data/mockStocks';
-import { StockData } from './types';
+import type { StockData, StockListItem, StockUniverseEnvelope } from './types';
+import { CANONICAL_STOCK_COUNT, isCanonicalTicker } from '../shared/stockUniverse';
 
 function isMatchingTicker(tickerA?: string, tickerB?: string): boolean {
   if (!tickerA || !tickerB) return false;
@@ -36,7 +36,62 @@ function safelyDecodeTicker(pathname: string, prefix: RegExp): string {
 
 function normalizeStockTicker(value: string): string {
   const clean = value.trim().toUpperCase().replace(/\.JK$/, '');
-  return clean === 'IHSG' || clean === 'JKSE' || clean === '^JKSE' ? '^JKSE' : clean;
+  return clean === 'IHSG' || clean === 'JKSE' || clean === '^JKSE' ? 'IHSG' : clean;
+}
+
+function isFullStockData(value: unknown): value is StockData {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<StockData>;
+  return (
+    typeof candidate.ticker === 'string' &&
+    Array.isArray(candidate.candles) &&
+    candidate.candles.length > 0 &&
+    Boolean(candidate.recommendation)
+  );
+}
+
+function isRealStockData(value: unknown): value is StockData {
+  return isFullStockData(value) && value.isRealData === true;
+}
+
+function isDevelopmentBuild(): boolean {
+  return Boolean(
+    (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV,
+  );
+}
+
+function isAllowedDetailData(value: unknown): value is StockData {
+  if (!isFullStockData(value)) return false;
+  return value.isRealData === true ||
+    (isDevelopmentBuild() && value.source === 'SYNTHETIC');
+}
+
+function isUniverseItem(value: unknown): value is StockListItem {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<StockListItem>;
+  return (
+    typeof candidate.ticker === 'string' &&
+    isCanonicalTicker(candidate.ticker) &&
+    candidate.isRealData === true &&
+    typeof candidate.currentPrice === 'number' &&
+    Boolean(candidate.recommendation)
+  );
+}
+
+function parseUniverseEnvelope(value: unknown): {
+  items: StockListItem[];
+  expected: number;
+  fetchedAt?: string;
+} | null {
+  if (!value || typeof value !== 'object') return null;
+  const payload = value as Partial<StockUniverseEnvelope>;
+  if (payload.success !== true || !Array.isArray(payload.data)) return null;
+  const items = payload.data.filter(isUniverseItem);
+  return {
+    items,
+    expected: payload.coverage?.expected ?? CANONICAL_STOCK_COUNT,
+    fetchedAt: payload.coverage?.fetchedAt,
+  };
 }
 
 export default function App() {
@@ -67,13 +122,15 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'landing' | 'chart' | 'inventory' | 'screener' | 'guide' | 'watchlist'>(
     initialTab
   );
-  const [stocks, setStocks] = useState<StockData[]>([]);
+  const [stocks, setStocks] = useState<StockListItem[]>([]);
   const [selectedStock, setSelectedStock] = useState<StockData | null>(null);
   const [timeframe, setTimeframe] = useState<string>('1D');
   const [isGuideOpen, setIsGuideOpen] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [isStockFetching, setIsStockFetching] = useState<boolean>(false);
   const [fetchingTicker, setFetchingTicker] = useState<string>('');
+  const [universeError, setUniverseError] = useState<string>('');
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   // Initial Sync HUD States (skip modal if directly opening an analysis or inventory URL)
   const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(
@@ -83,10 +140,10 @@ export default function App() {
   const [syncedTickers, setSyncedTickers] = useState<string[]>([]);
   const [currentProcessingTicker, setCurrentProcessingTicker] = useState<string>('BRPT');
   const [isSyncComplete, setIsSyncComplete] = useState<boolean>(false);
-  const [totalTargetCount, setTotalTargetCount] = useState<number>(85);
+  const [totalTargetCount, setTotalTargetCount] = useState<number>(CANONICAL_STOCK_COUNT);
 
   // Synchronize browser history and popstate for back/forward navigation
-  const stocksRef = useRef<StockData[]>(stocks);
+  const stocksRef = useRef<StockListItem[]>(stocks);
   const tickerCacheRef = useRef(new Map<string, { data: StockData; fetchedAt: number }>());
   const tickerRequestsRef = useRef(new Map<string, Promise<StockData | null>>());
   const universeFetchedAtRef = useRef(0);
@@ -106,14 +163,20 @@ export default function App() {
         setActiveTab('chart');
         if (t) {
           const match = stocksRef.current.find((s) => isMatchingTicker(s.ticker, t));
-          if (match) setSelectedStock(match);
+          if (match && isAllowedDetailData(match)) setSelectedStock(match);
+          else if (match) void fetchTickerData(t).then((detail) => {
+            if (detail) mergeStockIntoState(detail, true);
+          });
         }
       } else if (path.startsWith('/inventory/') || path === '/inventory') {
         const t = safelyDecodeTicker(path, /^\/inventory\/?/);
         setActiveTab('inventory');
         if (t) {
           const match = stocksRef.current.find((s) => isMatchingTicker(s.ticker, t));
-          if (match) setSelectedStock(match);
+          if (match && isAllowedDetailData(match)) setSelectedStock(match);
+          else if (match) void fetchTickerData(t).then((detail) => {
+            if (detail) mergeStockIntoState(detail, true);
+          });
         }
       } else if (path === '/screener') {
         setActiveTab('screener');
@@ -157,19 +220,21 @@ export default function App() {
   };
 
   const mergeStockIntoState = (incoming: StockData, select = false) => {
+    if (!isAllowedDetailData(incoming)) return;
     const key = normalizeStockTicker(incoming.ticker);
-    const existingAtCall = stocksRef.current.find((stock) => isMatchingTicker(stock.ticker, incoming.ticker));
-    let accepted = existingAtCall?.isRealData && !incoming.isRealData ? existingAtCall : incoming;
+    let accepted: StockData = incoming;
     tickerCacheRef.current.set(key, { data: accepted, fetchedAt: Date.now() });
     setStocks((prev) => {
       const existing = prev.find((stock) => isMatchingTicker(stock.ticker, incoming.ticker));
-      if (existing?.isRealData && !incoming.isRealData) accepted = existing;
       const exists = Boolean(existing);
       const updated = exists
         ? prev.map((stock) => (isMatchingTicker(stock.ticker, incoming.ticker) ? accepted : stock))
         : [accepted, ...prev];
       try {
-        localStorage.setItem('smc_custom_stocks', JSON.stringify(updated.filter((stock) => stock.isRealData)));
+        localStorage.setItem(
+          'smc_custom_stocks',
+          JSON.stringify(updated.filter((stock): stock is StockData => isRealStockData(stock))),
+        );
       } catch {
         // Storage is optional and must not affect market data state.
       }
@@ -194,13 +259,17 @@ export default function App() {
       try {
         const response = await fetch(`/api/stock/${encodeURIComponent(key)}`);
         if (response.ok) {
-          stockData = await response.json();
+          const candidate: unknown = await response.json();
+          if (isAllowedDetailData(candidate)) stockData = candidate;
         } else {
           const fallbackResponse = await fetch(`/api/stock?symbol=${encodeURIComponent(key)}`);
-          if (fallbackResponse.ok) stockData = await fallbackResponse.json();
+          if (fallbackResponse.ok) {
+            const candidate: unknown = await fallbackResponse.json();
+            if (isAllowedDetailData(candidate)) stockData = candidate;
+          }
         }
       } catch {
-        // The client-side provider is the explicit fallback when the API route is unavailable.
+        // The browser provider below is a second real-data path.
       }
 
       if (!stockData || !Array.isArray(stockData.candles) || stockData.candles.length === 0) {
@@ -212,7 +281,18 @@ export default function App() {
         }
       }
 
-      if (stockData && Array.isArray(stockData.candles) && stockData.candles.length > 0) {
+      if (!stockData && isDevelopmentBuild()) {
+        try {
+          const { getMockStocks } = await import('./data/mockStocks');
+          stockData = getMockStocks().find((candidate) =>
+            isMatchingTicker(candidate.ticker, key),
+          ) ?? null;
+        } catch {
+          stockData = null;
+        }
+      }
+
+      if (isAllowedDetailData(stockData)) {
         tickerCacheRef.current.set(key, { data: stockData, fetchedAt: Date.now() });
         return stockData;
       }
@@ -225,85 +305,95 @@ export default function App() {
     return request;
   };
 
-  // Load stock data on mount
+  // Load the compact real-data universe on mount. Detail candles are fetched
+  // lazily for the selected ticker, so the list response never carries full
+  // candle/indicator/SMC arrays.
   useEffect(() => {
     let isMounted = true;
 
     async function loadStocks() {
-      let initialList: StockData[] = [];
-      let loadedFromSnapshot = false;
+      let initialList: StockListItem[] = [];
+      let expectedCount: number = CANONICAL_STOCK_COUNT;
+      let loadedFromApi = false;
+      let usedDevelopmentMocks = false;
       try {
         const res = await fetch('/api/stocks');
-        if (res.ok) {
-          const data: StockData[] = await res.json();
-          if (data && data.length > 0) {
-            initialList = data;
-            loadedFromSnapshot = true;
-          }
+        const payload: unknown = await res.json().catch(() => null);
+        const parsed = res.ok ? parseUniverseEnvelope(payload) : null;
+        if (parsed) {
+          initialList = parsed.items;
+          expectedCount = parsed.expected;
+          loadedFromApi = true;
         }
-      } catch (e) {
-        // Fallback to local stock data
+      } catch {
+        // The controlled error state below distinguishes unavailable real data.
       }
 
-      if (initialList.length === 0) {
+      // Mock data is an explicit development-only escape hatch and is labeled
+      // synthetic by getMockStocks. It is not bundled into production success.
+      if (initialList.length === 0 && isDevelopmentBuild()) {
+        const { getMockStocks } = await import('./data/mockStocks');
         initialList = getMockStocks();
+        expectedCount = initialList.length;
+        usedDevelopmentMocks = true;
       }
 
-      // Merge saved custom/user-added stocks from localStorage
+      // Last-known custom data is allowed only when it is a full, explicitly
+      // real snapshot. Synthetic localStorage entries never enter production
+      // state, and custom entries do not inflate canonical coverage.
       try {
         const cachedCustom = localStorage.getItem('smc_custom_stocks');
-        if (cachedCustom) {
-          const parsed: StockData[] = JSON.parse(cachedCustom);
-          if (parsed && Array.isArray(parsed)) {
-            parsed.forEach((customStock) => {
-              if (!customStock || !customStock.ticker || !Array.isArray(customStock.candles)) return;
-              const idx = initialList.findIndex((s) => isMatchingTicker(s.ticker, customStock.ticker));
-              if (idx >= 0) {
-                initialList[idx] = customStock;
-              } else {
-                initialList.push(customStock);
-              }
-            });
-          }
+        const parsedCustom: unknown = cachedCustom ? JSON.parse(cachedCustom) : null;
+        if (Array.isArray(parsedCustom)) {
+          parsedCustom.forEach((candidate: unknown) => {
+            if (!isRealStockData(candidate)) return;
+            const index = initialList.findIndex((stock) => isMatchingTicker(stock.ticker, candidate.ticker));
+            if (index >= 0) initialList[index] = candidate;
+            else initialList.push(candidate);
+          });
         }
-      } catch (e) {
-        // ignore
+      } catch {
+        // Last-known storage is optional and must never block real loading.
       }
 
-      if (isMounted) {
-        const fetchedAt = Date.now();
-        initialList.forEach((stock) => {
-          tickerCacheRef.current.set(normalizeStockTicker(stock.ticker), { data: stock, fetchedAt });
-        });
-        if (loadedFromSnapshot) universeFetchedAtRef.current = fetchedAt;
-        setStocks(initialList);
-
-        // If URL specified a ticker (e.g. /analysis/BBCA), find it or fetch it
-        if (initialUrlTicker) {
-          const matchedUrlStock = initialList.find((s) => isMatchingTicker(s.ticker, initialUrlTicker));
-          if (matchedUrlStock) {
-            setSelectedStock(matchedUrlStock);
-          } else {
-            const temp = initialList.find((s) => s.ticker === 'BRPT') || initialList[0];
-            setSelectedStock(temp);
-          }
-        } else {
-          const brpt = initialList.find((s) => s.ticker === 'BRPT') || initialList[0];
-          setSelectedStock(brpt);
+      if (!isMounted) return;
+      const canonicalAvailableCount = initialList.filter((stock) => isCanonicalTicker(stock.ticker)).length;
+      const canonicalTickers = initialList
+        .filter((stock) => isCanonicalTicker(stock.ticker))
+        .map((stock) => stock.ticker);
+      const cachedAt = Date.now();
+      initialList.forEach((stock) => {
+        if (isRealStockData(stock)) {
+          tickerCacheRef.current.set(normalizeStockTicker(stock.ticker), { data: stock, fetchedAt: cachedAt });
         }
-        setLoading(false);
-        setTotalTargetCount(initialList.length);
-        setSyncedTickers(initialList.map((stock) => stock.ticker));
-        setSyncProgress(100);
-        setIsSyncComplete(true);
-        setIsSyncModalOpen(false);
+      });
+      setStocks(initialList);
+      setTotalTargetCount(expectedCount);
+      setSyncedTickers(canonicalTickers);
+      setSyncProgress(expectedCount > 0 ? Math.min(100, Math.round((canonicalAvailableCount / expectedCount) * 100)) : 0);
+      setIsSyncComplete(true);
+      setIsSyncModalOpen(false);
+      if (loadedFromApi) universeFetchedAtRef.current = Date.now();
+      if (usedDevelopmentMocks) {
+        setUniverseError('DEVELOPMENT ONLY: menampilkan fixture synthetic karena data real belum tersedia.');
+      } else if (canonicalAvailableCount < expectedCount) {
+        setUniverseError('Sebagian data pasar real belum tersedia. Data yang tersedia tetap ditampilkan.');
+      } else {
+        setUniverseError('');
       }
 
-      if (initialUrlTicker) {
-        const liveDirect = await fetchTickerData(initialUrlTicker);
-        if (isMounted && liveDirect) mergeStockIntoState(liveDirect, true);
-      }
+      const preferredTicker = initialUrlTicker ||
+        (initialList.find((stock) => isMatchingTicker(stock.ticker, 'BRPT'))?.ticker ?? initialList[0]?.ticker);
+      let selectedDetail: StockData | null = null;
+      if (preferredTicker) selectedDetail = await fetchTickerData(preferredTicker);
 
+      if (!isMounted) return;
+      if (selectedDetail) {
+        mergeStockIntoState(selectedDetail, true);
+      } else {
+        setUniverseError((current) => current || 'Data OHLCV real belum tersedia untuk ticker awal.');
+      }
+      setLoading(false);
     }
     void loadStocks();
 
@@ -312,30 +402,28 @@ export default function App() {
       if (Date.now() - universeFetchedAtRef.current < 15 * 60 * 1000) return;
       try {
         const res = await fetch('/api/stocks');
-        if (!res.ok) return;
-        const freshData: StockData[] = await res.json();
-        if (!isMounted || !Array.isArray(freshData) || freshData.length === 0) return;
+        const payload: unknown = await res.json().catch(() => null);
+        const parsed = res.ok ? parseUniverseEnvelope(payload) : null;
+        if (!isMounted || !parsed || parsed.items.length === 0) return;
         universeFetchedAtRef.current = Date.now();
-        freshData.forEach((incoming) => {
-          const key = normalizeStockTicker(incoming.ticker);
-          tickerCacheRef.current.set(key, { data: incoming, fetchedAt: Date.now() });
-        });
+        setTotalTargetCount(parsed.expected);
+        setSyncedTickers(parsed.items.map((stock) => stock.ticker));
         setStocks((prev) => {
           const updated = [...prev];
-          freshData.forEach((incoming) => {
-            const idx = updated.findIndex((s) => isMatchingTicker(s.ticker, incoming.ticker));
+          parsed.items.forEach((incoming) => {
+            const idx = updated.findIndex((stock) => isMatchingTicker(stock.ticker, incoming.ticker));
             if (idx >= 0) {
-              const existing = updated[idx];
-              if (existing.isRealData && !incoming.isRealData) return;
-              updated[idx] = incoming;
-            } else {
-              updated.push(incoming);
+              if (!isRealStockData(updated[idx])) updated[idx] = incoming;
             }
+            else updated.push(incoming);
           });
           return updated;
         });
+        setUniverseError(parsed.items.length < parsed.expected
+          ? 'Sebagian data pasar real belum tersedia. Data yang tersedia tetap ditampilkan.'
+          : '');
       } catch {
-        // Keep the current snapshot when the refresh provider is unavailable.
+        // Keep the current real snapshot when refresh is unavailable.
       }
     };
 
@@ -346,7 +434,7 @@ export default function App() {
       window.clearInterval(universeTimer);
       document.removeEventListener('visibilitychange', refreshUniverse);
     };
-  }, []);
+  }, [loadAttempt]);
 
   // Watchlist refresh is lazy, visible-tab only, and capped at three requests.
   useEffect(() => {
@@ -386,7 +474,7 @@ export default function App() {
     };
   }, [activeTab, watchlist.join(',')]);
 
-  const handleSelectStock = async (stock: StockData) => {
+  const handleSelectStock = async (stock: StockListItem) => {
     setFetchingTicker(stock.ticker);
     setIsStockFetching(true);
     const minDelay = new Promise((resolve) => setTimeout(resolve, 1200));
@@ -397,11 +485,14 @@ export default function App() {
 
       if (freshRealData && freshRealData.candles && freshRealData.candles.length > 0) {
         mergeStockIntoState(freshRealData, true);
-      } else {
+      } else if (isAllowedDetailData(stock)) {
         setSelectedStock(stock);
+      } else {
+        setUniverseError(`Data OHLCV real untuk ${stock.ticker} belum tersedia.`);
       }
     } catch (e) {
-      setSelectedStock(stock);
+      if (isAllowedDetailData(stock)) setSelectedStock(stock);
+      else setUniverseError(`Data OHLCV real untuk ${stock.ticker} belum tersedia.`);
     } finally {
       setIsStockFetching(false);
     }
@@ -431,14 +522,11 @@ export default function App() {
   const handleStartChart = (ticker?: string) => {
     setActiveTab('chart');
     if (ticker) {
-      let cleanTicker = ticker.trim().toUpperCase();
-      if (cleanTicker === 'IHSG' || cleanTicker === 'JKSE' || cleanTicker === '^JKSE') {
-        cleanTicker = '^JKSE';
-      }
+      const cleanTicker = normalizeStockTicker(ticker);
       const match = stocks.find(
         (s) =>
-          s.ticker === cleanTicker ||
-          (cleanTicker === '^JKSE' && (s.ticker === 'IHSG' || s.ticker === 'JKSE' || s.name.toLowerCase().includes('ihsg')))
+          isMatchingTicker(s.ticker, cleanTicker) ||
+          (cleanTicker === 'IHSG' && s.name.toLowerCase().includes('ihsg'))
       );
       if (match) {
         handleSelectStock(match);
@@ -448,12 +536,36 @@ export default function App() {
     }
   };
 
-  if (loading || !selectedStock) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center font-mono text-xs">
         <div className="flex flex-col items-center gap-3">
           <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
           <span>Loading Smart Money Concepts IDX Data...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!selectedStock) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center font-mono text-xs p-6">
+        <div className="max-w-lg w-full rounded-2xl border border-rose-500/30 bg-slate-900/90 p-8 text-center shadow-2xl">
+          <div className="text-rose-400 font-black text-lg mb-3">Data pasar real belum tersedia</div>
+          <p className="text-slate-400 leading-relaxed mb-5">
+            {universeError || 'SmartChart tidak menerima OHLCV real dari Redis atau Yahoo Finance.'}
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setLoading(true);
+              setUniverseError('');
+              setLoadAttempt((attempt) => attempt + 1);
+            }}
+            className="rounded-xl bg-emerald-500 px-4 py-2.5 font-bold text-slate-950 hover:bg-emerald-400 transition-colors"
+          >
+            Coba lagi
+          </button>
         </div>
       </div>
     );
@@ -504,15 +616,20 @@ export default function App() {
 
       {/* Main Content Body */}
       <main className="flex-1">
+        {universeError && (
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs font-mono text-amber-200">
+              {universeError}
+            </div>
+          </div>
+        )}
         {activeTab === 'landing' && (
           <ParallaxHero
             onStartChart={handleStartChart}
             onOpenScreener={() => setActiveTab('screener')}
             stocks={stocks}
             onUpdateIhsgData={(liveData) => {
-              setStocks((prev) =>
-                prev.map((s) => (isMatchingTicker(s.ticker, liveData.ticker) ? liveData : s))
-              );
+              mergeStockIntoState(liveData);
             }}
           />
         )}
@@ -522,7 +639,6 @@ export default function App() {
             stocks={stocks}
             selectedStock={selectedStock}
             onSelectStock={(s) => {
-              setSelectedStock(s);
               handleSelectStock(s);
               try {
                 const displayT = s.ticker === '^JKSE' ? 'IHSG' : s.ticker;
@@ -566,7 +682,9 @@ export default function App() {
                 <div className="bg-slate-900/90 border border-emerald-500/30 rounded-2xl p-3 px-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-mono">
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-                    <span className="font-bold text-emerald-400">REAL IDX MARKET DATA</span>
+                    <span className={`font-bold ${selectedStock.isRealData === true ? 'text-emerald-400' : 'text-amber-300'}`}>
+                      {selectedStock.isRealData === true ? 'REAL IDX MARKET DATA' : 'DEVELOPMENT SYNTHETIC DATA'}
+                    </span>
                     <span className="text-slate-400 hidden md:inline">|</span>
                     <span className="text-slate-300">
                       Powered by Market Data API (Delayed ~15 min)
@@ -606,7 +724,7 @@ export default function App() {
             <StockScreener
               stocks={stocks}
               onSelectStock={(s) => {
-                setSelectedStock(s);
+                handleSelectStock(s);
                 setActiveTab('chart');
               }}
               onFetchNewStock={handleFetchNewStock}
@@ -624,7 +742,7 @@ export default function App() {
               watchlist={watchlist}
               stocks={stocks}
               onSelectStock={(s) => {
-                setSelectedStock(s);
+                handleSelectStock(s);
                 setActiveTab('chart');
               }}
               onRemoveFromWatchlist={handleToggleWatchlist}
